@@ -17,7 +17,7 @@ function createWindow() {
     height: 840,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#0a1628',
+    backgroundColor: '#fbd9e6',
     title: "Leon's Ledger",
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
