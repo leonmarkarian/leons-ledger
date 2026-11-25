@@ -123,7 +123,8 @@ ipcMain.handle('update:check', async () => {
   if (!autoUpdater || !app.isPackaged) { sendUpdate('dev'); return false; }
   try { await autoUpdater.checkForUpdates(); return true; } catch (e) { sendUpdate('error', { message: e.message }); return false; }
 });
-ipcMain.handle('update:install', () => { if (autoUpdater) autoUpdater.quitAndInstall(); });
+// silent install (no installer window), then reopen the app automatically
+ipcMain.handle('update:install', () => { if (autoUpdater) setImmediate(() => autoUpdater.quitAndInstall(true, true)); });
 
 // ---------- App lifecycle ----------
 if (!app.requestSingleInstanceLock()) {
