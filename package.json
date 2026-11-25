@@ -1,0 +1,73 @@
+{
+  "name": "leons-ledger",
+  "productName": "Leon's Ledger",
+  "version": "1.0.0",
+  "description": "Personal income splitter and budget tracker with an AI advisor",
+  "main": "main.js",
+  "author": "Leon Markarian",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/logic.test.js",
+    "dist": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "resedit": "^2.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leonmarkarian/leons-ledger.git"
+  },
+  "build": {
+    "appId": "com.leonmarkarian.ledger",
+    "productName": "Leon's Ledger",
+    "copyright": "\u00a9 2026 Leon Markarian",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Leons-Ledger-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Leon's Ledger",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "leonmarkarian",
+        "repo": "leons-ledger",
+        "releaseType": "release"
+      }
+    ],
+    "afterPack": "scripts/afterPack.js"
+  }
+}

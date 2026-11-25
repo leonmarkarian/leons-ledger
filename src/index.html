@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+  <title>Leon's Ledger</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div><div class="brand-name">Leon's Ledger</div><div class="brand-sub" id="versionLabel">v—</div></div>
+    </div>
+    <nav id="nav">
+      <button data-page="dashboard" class="active"><span>◧</span>Dashboard</button>
+      <button data-page="income"><span>＋</span>Log income</button>
+      <button data-page="spend"><span>−</span>Spend / Pay</button>
+      <button data-page="plan"><span>%</span>Split plan</button>
+      <button data-page="history"><span>☰</span>History</button>
+      <button data-page="advisor"><span>✦</span>AI advisor</button>
+      <button data-page="settings"><span>⚙</span>Settings</button>
+    </nav>
+    <div class="update-pill hidden" id="updatePill"></div>
+  </aside>
+  <main id="main"></main>
+  <div id="toasts"></div>
+  <div id="modalRoot"></div>
+  <script src="logic.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
