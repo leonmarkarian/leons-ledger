@@ -51,3 +51,55 @@ assert.ok(Array.isArray(mig.transfers) && mig.settings.currency === 'USD');
 assert.ok(L.summaryForAI(s, s.incomes[0]).includes('NEW INCOME JUST LOGGED'));
 assert.ok(L.fallbackAdvice(s, s.incomes[0]).length > 50);
 console.log('All logic tests passed.');
+
+// ---------- v1.1 features ----------
+{
+  const t = L.migrate({ settings: { paymentMethods: ['Cash', 'Card'] }, transactions: [{ id: 'x', date: '2026-01-01', sectionId: 'a', categoryId: 'b', amount: 5, method: 'Card' }] });
+  assert.strictEqual(t.settings.wallets.length, 2);
+  assert.strictEqual(t.transactions[0].walletId, t.settings.wallets[1].id, 'old method maps to wallet');
+  assert.strictEqual(t.settings.model, 'claude-haiku-5-5');
+
+  assert.strictEqual(L.toUSD(895000, 'LBP', 89500), 10);
+  assert.strictEqual(L.toUSD(12.345, 'USD'), 12.35);
+
+  const st = L.defaultState();
+  const w = st.settings.wallets;
+  const sp = L.splitIncome(1000, st.sections);
+  st.incomes.push({ id: 'i', date: L.localToday(), amount: 1000, walletId: w[0].id, allocations: sp.allocations });
+  const allow = st.sections[0];
+  st.transactions.push({ id: 't', date: L.localToday(), sectionId: allow.id, categoryId: allow.categories[0].id, amount: 100, walletId: w[1].id });
+  st.walletTransfers.push({ id: 'wt', date: L.localToday(), fromWalletId: w[0].id, toWalletId: w[1].id, amount: 300 });
+  const wb = L.walletBalances(st);
+  assert.strictEqual(wb[0].balance, 700); assert.strictEqual(wb[1].balance, 200);
+
+  const ms = L.monthlySeries(st, 6);
+  assert.strictEqual(ms.length, 6);
+  assert.strictEqual(ms[5].income, 1000); assert.strictEqual(ms[5].out, 100); assert.strictEqual(ms[5].cumulative, 900);
+  assert.strictEqual(L.spendingByCategory(st)[0].amount, 100);
+
+  // goal: emergency 6-month buffer target 4500, plan rate = 1000*10%*100% = 100/mo, saved 100 → 44 months
+  const g = L.goalTimelines(st).find((x) => x.name === '6-month buffer');
+  assert.strictEqual(g.planRate, 100); assert.strictEqual(g.saved, 100); assert.strictEqual(g.months, 44);
+  const g2 = L.goalTimelines(st, { [g.categoryId]: 100 }).find((x) => x.name === '6-month buffer');
+  assert.strictEqual(g2.months, 22);
+
+  // debt planner: two debts, avalanche pays less interest than snowball
+  const debts = [{ name: 'Card', balance: 2000, apr: 24, minPayment: 50 }, { name: 'Loan', balance: 500, apr: 5, minPayment: 25 }];
+  const av = L.debtPlan(debts, 300, 'avalanche'), sb = L.debtPlan(debts, 300, 'snowball');
+  assert.ok(av.ok && sb.ok); assert.ok(av.totalInterest < sb.totalInterest, 'avalanche cheaper');
+  assert.strictEqual(sb.debts.find((d) => d.name === 'Loan').paidOffMonth < av.debts.find((d) => d.name === 'Loan').paidOffMonth, true);
+  assert.strictEqual(L.debtPlan([{ name: 'x', balance: 1200, apr: 0, minPayment: 0 }], 100).months, 12);
+  assert.ok(!L.debtPlan([{ name: 'x', balance: 100000, apr: 30, minPayment: 0 }], 100).ok, 'never paid off');
+
+  // recurring
+  st.recurring.push({ id: 'r1', name: 'Rent', amount: 400, sectionId: allow.id, categoryId: allow.categories[0].id, walletId: w[0].id, day: 1, auto: true, lastLogged: '' });
+  assert.strictEqual(L.dueRecurring(st, '2026-12-05').length, 1);
+  st.recurring[0].lastLogged = '2026-12';
+  assert.strictEqual(L.dueRecurring(st, '2026-12-20').length, 0);
+  assert.strictEqual(L.dueRecurring(st, '2027-01-01').length, 1);
+  assert.strictEqual(L.recurringTx(st.recurring[0], '2027-01-03').date, '2027-01-01');
+
+  const csv = L.toCSV(st);
+  assert.ok(csv.includes('Payment') && csv.includes('Income') && csv.split('\r\n').length === 3);
+  console.log('v1.1 feature tests passed.');
+}

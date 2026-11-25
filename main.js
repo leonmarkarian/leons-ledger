@@ -71,6 +71,32 @@ ipcMain.handle('data:export', async (_e, state) => {
   return filePath;
 });
 
+ipcMain.handle('data:exportCSV', async (_e, name, csv) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(win, { title: 'Export to Excel (CSV)', defaultPath: name, filters: [{ name: 'CSV (opens in Excel)', extensions: ['csv'] }] });
+  if (canceled || !filePath) return false;
+  fs.writeFileSync(filePath, csv, 'utf8');
+  return filePath;
+});
+
+// Beautiful PDF report: render the report HTML off-screen and print it to PDF
+ipcMain.handle('report:pdf', async (_e, html, name) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(win, { title: 'Save report as PDF', defaultPath: name, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+  if (canceled || !filePath) return false;
+  const pdfWin = new BrowserWindow({ show: false, width: 900, height: 1200, webPreferences: { sandbox: true, contextIsolation: true, javascript: false } });
+  try {
+    await pdfWin.loadURL('data:text/html;charset=utf-8;base64,' + Buffer.from(html, 'utf8').toString('base64'));
+    const pdf = await pdfWin.webContents.printToPDF({
+      pageSize: 'A4', printBackground: true, preferCSSPageSize: true,
+      
+      displayHeaderFooter: true, headerTemplate: '<span></span>',
+      footerTemplate: '<div style="width:100%;font-size:8px;color:#9a9aa5;text-align:center;font-family:Segoe UI,sans-serif">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>'
+    });
+    fs.writeFileSync(filePath, pdf);
+    shell.openPath(filePath);
+    return filePath;
+  } finally { pdfWin.destroy(); }
+});
+
 ipcMain.handle('data:import', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Import backup', properties: ['openFile'],

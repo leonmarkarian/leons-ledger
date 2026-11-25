@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#000000" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.anthropic.com; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.anthropic.com; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:;" />
   <title>Leon's Ledger</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -15,20 +15,24 @@
       <div><div class="brand-name">Leon's Ledger</div><div class="brand-sub" id="versionLabel">v—</div></div>
     </div>
     <nav id="nav">
-      <button data-page="dashboard" class="active"><span>◧</span>Dashboard</button>
-      <button data-page="income"><span>＋</span>Log income</button>
-      <button data-page="spend"><span>−</span>Spend / Pay</button>
-      <button data-page="plan"><span>%</span>Split plan</button>
-      <button data-page="history"><span>☰</span>History</button>
-      <button data-page="advisor"><span>✦</span>AI advisor</button>
-      <button data-page="settings"><span>⚙</span>Settings</button>
+      <button data-page="dashboard" class="active"><span>◧</span><em data-short="Home">Dashboard</em></button>
+      <button data-page="income"><span>＋</span><em data-short="Income">Log income</em></button>
+      <button data-page="spend"><span>−</span><em data-short="Spend">Spend / Pay</em></button>
+      <button data-page="plan"><span>%</span><em data-short="Plan">Split plan</em></button>
+      <button data-page="goals"><span>◎</span><em data-short="Goals">Goals & debts</em></button>
+      <button data-page="reports"><span>▦</span><em data-short="Reports">Reports</em></button>
+      <button data-page="history"><span>☰</span><em data-short="History">History</em></button>
+      <button data-page="advisor"><span>✦</span><em data-short="AI">AI advisor</em></button>
+      <button data-page="settings"><span>⚙</span><em data-short="Settings">Settings</em></button>
     </nav>
     <div class="update-pill hidden" id="updatePill"></div>
   </aside>
   <main id="main"></main>
   <div id="toasts"></div>
   <div id="modalRoot"></div>
+  <div id="lockRoot"></div>
   <script src="logic.js"></script>
+  <script src="report.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

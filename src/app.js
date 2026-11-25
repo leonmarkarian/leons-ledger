@@ -21,6 +21,11 @@
   let historyFilter = 'all';
   let spendTab = 'spend';
   let manualUpdateCheck = false;
+  let reportRange = 6;
+  let goalExtras = {};
+  let debtBudget = null;
+  let debtStrategy = 'avalanche';
+  let scanBusy = false;
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -67,12 +72,35 @@
     }).join('')}</optgroup>`).join('');
   }
 
+  function walletOptions(selected) {
+    return state.settings.wallets.map((w) => `<option value="${w.id}" ${w.id === selected ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
+  }
+  const walletName = (id) => { const w = state.settings.wallets.find((x) => x.id === id); return w ? w.name : ''; };
+  function currencySelect(id) {
+    return `<select id="${id}" class="cur-select" title="Currency"><option value="USD">${esc(state.settings.currency || 'USD')}</option><option value="LBP">LBP</option></select>`;
+  }
+  function readAmount(amountSel, curSel) {
+    const raw = Number($(amountSel).value);
+    const cur = $(curSel) ? $(curSel).value : 'USD';
+    const usd = L.toUSD(raw, cur, state.settings.lbpRate);
+    return { usd, original: cur === 'LBP' ? { amount: raw, currency: 'LBP', rate: state.settings.lbpRate } : null, raw, cur };
+  }
+  const ord = (n) => { n = Number(n); const sfx = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (sfx[(v - 20) % 10] || sfx[v] || sfx[0]); };
+  const lbp = (n) => 'LBP ' + Math.round(n).toLocaleString('en-US');
+
+  function applyTheme() {
+    const t = state.settings.theme || 'black';
+    document.documentElement.dataset.theme = t;
+    const meta = document.querySelector('meta[name=theme-color]');
+    if (meta) meta.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#000');
+  }
+
   // ---------------- AI ----------------
   function systemPrompt() {
     return [
-      "You are the built-in financial advisor inside Leon's Ledger, a personal budgeting app. The user is Leon.",
-      'You see his split plan (sections and categories with percentages), current balances, debts, goals and recent activity.',
-      'Give practical, specific, encouraging but honest advice in plain language. Use his real numbers. Keep it concise:',
+      "You are the built-in financial advisor inside Leon's Ledger, a personal budgeting app." + (state.settings.userName ? ` The user's name is ${state.settings.userName}.` : ''),
+      'You see their split plan (sections and categories with percentages), current balances, debts, goals, wallets and recent activity.',
+      'Give practical, specific, encouraging but honest advice in plain language. Use their real numbers. Keep it concise:',
       'short paragraphs or a few bullet points, no tables, no markdown headers. Suggest concrete amounts or percentage changes when useful.',
       'You are not a licensed financial advisor: do not recommend specific stocks, coins or trades; talk about strategy (debt payoff order, emergency fund, diversification, savings rate, goal timelines).'
     ].join(' ');
@@ -99,19 +127,115 @@
     render();
   }
 
+  // ---------------- Receipt scanning ----------------
+  function imageToJpegBase64(file, maxSide) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const k = Math.min(1, (maxSide || 1280) / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not open that image.')); };
+      img.src = url;
+    });
+  }
+
+  async function scanReceipt(file) {
+    const st = state.settings;
+    if (!st.aiEnabled || !st.apiKey) return toast('Receipt scanning uses the AI — add your API key in Settings first.', true);
+    scanBusy = true; render();
+    try {
+      const data = await imageToJpegBase64(file, 1280);
+      const cats = state.sections.flatMap((s) => s.categories.map((c) => `${s.name} → ${c.name}`));
+      const prompt = `Read this receipt, invoice or payment screenshot. Reply with ONLY a JSON object, no other text:
+{"amount": number (the total paid), "currency": "USD" or "LBP", "date": "YYYY-MM-DD" or null, "merchant": short name, "category": the best match from this list or null: ${JSON.stringify(cats)}}`;
+      const res = await api.askAI({ apiKey: st.apiKey, model: st.model, system: 'You extract payment details from images. Output strict JSON only.',
+        messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }, { type: 'text', text: prompt }] }] });
+      if (!res.ok) throw new Error(res.error);
+      const json = JSON.parse((res.text.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+      scanBusy = false; render();
+      if (json.amount) $('#spAmount').value = json.amount;
+      if (json.currency === 'LBP') $('#spCur').value = 'LBP';
+      if (json.date && /^\d{4}-\d{2}-\d{2}$/.test(json.date)) $('#spDate').value = json.date;
+      if (json.merchant) $('#spNote').value = json.merchant;
+      if (json.category) {
+        const opt = Array.from($('#spCat').options).find((o) => o.text === json.category);
+        if (opt) { $('#spCat').value = opt.value; $('#spCat').dispatchEvent(new Event('change')); }
+      }
+      $('#spAmount').dispatchEvent(new Event('input'));
+      toast(json.amount ? 'Receipt read — check the details, then press Save.' : "Couldn't find a total on that image. Please type it in.", !json.amount);
+    } catch (e) {
+      scanBusy = false; render();
+      toast('Could not read the receipt: ' + e.message, true);
+    }
+  }
+
+  // ---------------- Charts (SVG, no libraries) ----------------
+  function barChart(series) {
+    const W = 640, H = 220, pad = { l: 44, r: 8, t: 10, b: 26 };
+    const max = Math.max(1, ...series.map((r) => Math.max(r.income, r.out)));
+    const n = series.length, gw = (W - pad.l - pad.r) / n, bw = Math.min(22, gw * 0.34);
+    const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / max);
+    const ticks = [0, 0.5, 1].map((k) => max * k);
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Income and spending per month">
+      ${ticks.map((t) => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(t)}" y2="${y(t)}" class="grid-line"/><text x="${pad.l - 6}" y="${y(t) + 4}" class="axis" text-anchor="end">${shortMoney(t)}</text>`).join('')}
+      ${series.map((r, i) => { const x = pad.l + gw * i + gw / 2;
+        return `<g><title>${L.monthLabel(r.month)}: in ${m(r.income)}, out ${m(r.out)}</title>
+          <rect x="${x - bw - 1}" y="${y(r.income)}" width="${bw}" height="${Math.max(0, H - pad.b - y(r.income))}" rx="4" class="bar-in"/>
+          <rect x="${x + 1}" y="${y(r.out)}" width="${bw}" height="${Math.max(0, H - pad.b - y(r.out))}" rx="4" class="bar-out"/>
+          <text x="${x}" y="${H - 8}" class="axis" text-anchor="middle">${L.monthLabel(r.month).split(' ')[0]}</text></g>`; }).join('')}
+    </svg>`;
+  }
+  function lineChart(series) {
+    const W = 640, H = 180, pad = { l: 44, r: 10, t: 12, b: 24 };
+    const vals = series.map((r) => r.cumulative);
+    const max = Math.max(1, ...vals), min = Math.min(0, ...vals);
+    const x = (i) => pad.l + (W - pad.l - pad.r) * (series.length === 1 ? 0.5 : i / (series.length - 1));
+    const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - (v - min) / (max - min || 1));
+    const pts = series.map((r, i) => `${x(i)},${y(r.cumulative)}`).join(' ');
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Balance over time">
+      <defs><linearGradient id="lg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" class="lg-top"/><stop offset="1" class="lg-bot"/></linearGradient></defs>
+      ${[min, (min + max) / 2, max].map((t) => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(t)}" y2="${y(t)}" class="grid-line"/><text x="${pad.l - 6}" y="${y(t) + 4}" class="axis" text-anchor="end">${shortMoney(t)}</text>`).join('')}
+      <polygon points="${x(0)},${y(min)} ${pts} ${x(series.length - 1)},${y(min)}" fill="url(#lg)"/>
+      <polyline points="${pts}" class="line"/>
+      ${series.map((r, i) => `<circle cx="${x(i)}" cy="${y(r.cumulative)}" r="3.5" class="dot"><title>${L.monthLabel(r.month)}: ${m(r.cumulative)}</title></circle>`).join('')}
+      ${series.map((r, i) => (series.length <= 12 || i % 2 === 0) ? `<text x="${x(i)}" y="${H - 6}" class="axis" text-anchor="middle">${L.monthLabel(r.month).split(' ')[0]}</text>` : '').join('')}
+    </svg>`;
+  }
+  const shortMoney = (v) => { const a = Math.abs(v), sg = v < 0 ? '-' : ''; const sy = state.settings.currencySymbol || '$';
+    return a >= 1e6 ? `${sg}${sy}${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${sg}${sy}${(a / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k` : `${sg}${sy}${Math.round(a)}`; };
+
   // ---------------- Pages ----------------
   const pages = {
     dashboard() {
       const b = L.balances(state);
       const latest = state.incomes[state.incomes.length - 1];
       const recent = activity().slice(0, 6);
+      const bizSecs = b.sections.filter((s) => s.type === 'business');
+      const bizAvail = L.round2(L.sum(bizSecs, (s) => s.available));
+      const personalAvail = L.round2(b.totalAvailable - bizAvail);
+      const wallets = L.walletBalances(state);
+      const due = L.dueRecurring(state).filter((r) => !r.auto);
+      const soon = L.upcomingRecurring(state, null, 3);
       return `
         <div class="row between"><div><h1>Dashboard</h1><p class="sub">Where your money is right now.</p></div>
           <div class="row"><button class="btn" data-go="spend">− Spend / Pay</button><button class="btn primary" data-go="income">＋ Log income</button></div></div>
         <div class="grid g3">
-          <div class="card stat"><div class="label">Available across all buckets</div><div class="value ${b.totalAvailable < 0 ? 'bad' : ''}" data-count="${b.totalAvailable}">${m(b.totalAvailable)}</div></div>
+          <div class="card stat"><div class="label">Available${bizSecs.length ? ' (personal)' : ' across all buckets'}</div><div class="value ${personalAvail < 0 ? 'bad' : ''}" data-count="${personalAvail}">${m(personalAvail)}</div>${bizSecs.length ? `<div class="muted small mt-s">Business kept separate: <b>${m(bizAvail)}</b></div>` : ''}</div>
           <div class="card stat"><div class="label">Total income logged</div><div class="value good" data-count="${b.totalIncome}">${m(b.totalIncome)}</div><div class="muted small mt-s">${state.incomes.length} payment${state.incomes.length === 1 ? '' : 's'}</div></div>
           <div class="card stat"><div class="label">Spent & paid</div><div class="value" data-count="${b.totalSpent}">${m(b.totalSpent)}</div><div class="muted small mt-s">${state.transactions.length} entr${state.transactions.length === 1 ? 'y' : 'ies'}</div></div>
+        </div>
+        ${due.length || soon.length ? `<div class="card mt due-card"><h2>🔔 Bills</h2>
+          ${due.map((r) => `<div class="row between due-row"><div><b>${esc(r.name)}</b> <span class="muted small">due on the ${ord(r.day)} · ${m(r.amount)}</span></div><button class="btn sm primary" data-paydue="${r.id}">Mark paid</button></div>`).join('')}
+          ${soon.map((r) => `<div class="row between due-row"><div>${esc(r.name)} <span class="muted small">coming up on the ${ord(r.day)} · ${m(r.amount)}${r.auto ? ' · logs automatically' : ''}</span></div></div>`).join('')}
+        </div>` : ''}
+        <div class="card mt"><div class="row between"><h2>Wallets</h2><button class="btn sm ghost" data-go="settings">Manage</button></div>
+          <div class="wallets">${wallets.map((w) => `<div class="wallet"><div class="muted small">${esc(w.name)}</div><div class="w-bal ${w.balance < 0 ? 'bad' : ''}">${m(w.balance)}</div></div>`).join('')}</div>
         </div>
         <div class="card mt"><div class="row between"><h2>Your split plan</h2><button class="btn sm ghost" data-go="plan">Edit plan</button></div>
           <div class="split-bar">${state.sections.map((s) => `<i style="width:${s.percent}%;background:${s.color}" title="${esc(s.name)} ${s.percent}%"></i>`).join('')}</div>
@@ -131,9 +255,11 @@
       return `<h1>Log income</h1><p class="sub">Enter what you got paid. It's split automatically by your plan — tweak it for this payment if you want.</p>
         <div class="grid g12">
           <div class="card">
-            <label class="f">Amount received<div class="money-input" data-sym="${sym()}"><input class="big" id="incAmount" type="number" min="0" step="0.01" placeholder="0.00" autofocus></div></label>
+            <label class="f">Amount received<div class="amount-row"><input class="big" id="incAmount" type="number" min="0" step="0.01" placeholder="0.00" autofocus>${currencySelect('incCur')}</div></label>
+            <div class="small muted mt-s" id="incConv"></div>
             <div class="form-grid mt">
               <label class="f">Date<input id="incDate" type="date" value="${today()}"></label>
+              <label class="f">Received into<select id="incWallet">${walletOptions()}</select></label>
               <label class="f">Source<input id="incSource" placeholder="e.g. Agency salary, freelance"></label>
               <label class="f full">Note<input id="incNote" placeholder="Optional"></label>
             </div>
@@ -148,8 +274,8 @@
 
     spend() {
       return `<h1>Spend / Pay</h1><p class="sub">Log money leaving a bucket — a purchase, a debt payment, an investment — or move money between buckets.</p>
-        <div class="tabs"><button data-tab="spend" class="${spendTab === 'spend' ? 'active' : ''}">Spend / Pay</button><button data-tab="transfer" class="${spendTab === 'transfer' ? 'active' : ''}">Move between buckets</button></div>
-        ${spendTab === 'spend' ? spendForm() : transferForm()}
+        <div class="tabs">${[['spend', 'Spend / Pay'], ['transfer', 'Move between buckets'], ['wallet', 'Move between wallets'], ['recurring', 'Recurring bills']].map(([k, l]) => `<button data-tab="${k}" class="${spendTab === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+        ${({ spend: spendForm, transfer: transferForm, wallet: walletTransferForm, recurring: recurringPanel })[spendTab]()}
         ${lastPaymentMsg ? `<div class="card result-card mt">✓ ${esc(lastPaymentMsg)}</div>` : ''}`;
     },
 
@@ -172,12 +298,14 @@
               <button class="icon-btn" data-delsec="${si}" title="Delete section">✕</button>
             </div>
             <div class="plan-cats">
-              <div class="plan-cat small muted"><span>Category</span><span>% of section</span><span>${s.type === 'debt' ? 'Total owed' : 'Goal (optional)'}</span><span>Note</span><span></span></div>
+              <div class="plan-cat small muted"><span>Category</span><span>% of section</span><span>${s.type === 'debt' ? 'Total owed' : 'Goal (optional)'}</span><span>${s.type === 'debt' ? 'Interest % per year · Minimum payment' : 'Note'}</span><span></span></div>
               ${s.categories.map((c, ci) => `<div class="plan-cat">
                 <input value="${esc(c.name)}" data-s="${si}" data-c="${ci}" data-k="name" placeholder="Category name">
                 <div class="pct-input"><input type="number" min="0" max="100" step="0.5" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div>
                 <div class="money-input" data-sym="${sym()}"><input type="number" min="0" step="0.01" value="${c.target || ''}" placeholder="—" data-s="${si}" data-c="${ci}" data-k="target"></div>
-                <input value="${esc(c.note || '')}" data-s="${si}" data-c="${ci}" data-k="note" placeholder="${s.type === 'debt' ? 'e.g. lender, due date, interest' : 'Optional'}">
+                ${s.type === 'debt' ? `<div class="debt-extra"><div class="pct-input" title="Yearly interest rate"><input type="number" min="0" step="0.1" value="${c.apr || ''}" placeholder="Interest/yr" data-s="${si}" data-c="${ci}" data-k="apr"></div>
+                  <div class="money-input" data-sym="${sym()}" title="Minimum monthly payment"><input type="number" min="0" step="0.01" value="${c.minPayment || ''}" placeholder="Min/month" data-s="${si}" data-c="${ci}" data-k="minPayment"></div></div>`
+                  : `<input value="${esc(c.note || '')}" data-s="${si}" data-c="${ci}" data-k="note" placeholder="Optional">`}
                 <button class="icon-btn" data-delcat="${si}|${ci}" title="Delete category">✕</button></div>`).join('')}
               <div class="row between"><button class="btn sm" data-addcat="${si}">＋ Add category</button>
                 <span class="small">Categories total: <b class="${Math.abs(ct - 100) < 0.001 ? 'good' : 'bad'}">${ct}%</b>
@@ -185,6 +313,80 @@
             </div></div>`;
         }).join('')}
         <p class="muted small">Changing the plan only affects future incomes. Past incomes keep the split they were saved with, so your history stays accurate.</p>`;
+    },
+
+    goals() {
+      const goals = L.goalTimelines(state, goalExtras);
+      const debts = L.currentDebts(state);
+      const inc = L.avgMonthlyIncome(state, 3);
+      const debtPct = L.sum(state.sections.filter((x) => x.type === 'debt'), (x) => x.percent);
+      if (debtBudget == null) debtBudget = L.round2(inc * debtPct / 100);
+      const plan = L.debtPlan(debts, debtBudget, debtStrategy);
+      const other = L.debtPlan(debts, debtBudget, debtStrategy === 'avalanche' ? 'snowball' : 'avalanche');
+      const thisMonth = L.monthKey(today());
+      return `<h1>Goals & debts</h1><p class="sub">When you'll reach each goal, and the fastest way to become debt-free.</p>
+        <div class="card"><h2>Savings goals</h2>
+          ${inc ? `<p class="muted small" style="margin-top:0">Based on your average income of <b>${m(inc)}</b>/month over your last 3 months of income and your split plan. Drag a slider to see what saving extra each month does.</p>` : `<p class="muted small" style="margin-top:0">Log some income first so the app can estimate how fast your goals fill up.</p>`}
+          ${goals.length ? goals.map((g) => `<div class="goal" data-goal="${g.categoryId}" style="--c:${g.color}">
+            <div class="row between"><div><b>${esc(g.name)}</b> <span class="muted small">${esc(g.section)}</span></div><div><b>${m(g.saved)}</b> <span class="muted">of ${m(g.target)}</span></div></div>
+            <div class="bar mt-s"><i style="width:${g.pct}%;background:${g.color}"></i></div>
+            <div class="row between mt-s wrap small">
+              <span class="muted">Plan adds <b>${m(g.planRate)}</b>/month${g.extra ? ` + <b class="g-extra-v">${m(g.extra)}</b> extra` : ''}</span>
+              <span class="g-eta">${g.left <= 0 ? '<b class="good">Goal reached 🎉</b>' : g.months == null ? '<span class="warn">Not growing yet — give it a share in your plan</span>' : `<b>${g.months}</b> month${g.months === 1 ? '' : 's'} left · <b>${L.monthLabel(g.eta)}</b>`}</span>
+            </div>
+            ${g.left > 0 ? `<label class="slider-row small muted">Extra per month <input type="range" min="0" max="${Math.max(200, Math.ceil(g.left / 100) * 10)}" step="10" value="${g.extra}" data-extra="${g.categoryId}"><span class="g-extra-label">${m(g.extra)}</span></label>` : ''}
+          </div>`).join('') : `<div class="empty">No goals yet. In <a href="#" data-go="plan">Split plan</a>, give a savings category a <b>Goal</b> amount (e.g. Wedding $10,000).</div>`}
+        </div>
+
+        <div class="card mt"><h2>Debt payoff planner</h2>
+          ${debts.length ? `
+          <div class="row wrap">
+            <label class="f" style="min-width:200px">Paying towards debts each month<div class="money-input" data-sym="${sym()}"><input id="dbBudget" type="number" min="0" step="10" value="${debtBudget}"></div></label>
+            <div class="tabs" style="margin:18px 0 0"><button data-strat="avalanche" class="${debtStrategy === 'avalanche' ? 'active' : ''}">Avalanche · highest interest first</button><button data-strat="snowball" class="${debtStrategy === 'snowball' ? 'active' : ''}">Snowball · smallest first</button></div>
+          </div>
+          ${debts.some((d) => !d.apr) ? `<p class="small warn">Tip: add each debt's interest rate and minimum payment in Split plan for an accurate plan.</p>` : ''}
+          ${!plan.ok ? `<div class="result-card card mt bad">At ${m(debtBudget)}/month the debts ${plan.reason === 'no-budget' ? "won't go down — set an amount above" : 'grow faster than you pay them. Increase the monthly amount'}.</div>` : `
+          <div class="grid g3 mt">
+            <div class="card stat"><div class="label">Debt-free in</div><div class="value">${plan.months} mo</div><div class="muted small mt-s">${L.monthLabel(L.addMonths(thisMonth, plan.months))}</div></div>
+            <div class="card stat"><div class="label">Interest you'll pay</div><div class="value">${m(plan.totalInterest)}</div>${other.ok && other.totalInterest !== plan.totalInterest ? `<div class="muted small mt-s">${other.totalInterest > plan.totalInterest ? 'Saves' : 'Costs'} ${m(Math.abs(other.totalInterest - plan.totalInterest))} vs ${debtStrategy === 'avalanche' ? 'snowball' : 'avalanche'}</div>` : ''}</div>
+            <div class="card stat"><div class="label">Still owed</div><div class="value">${m(L.sum(debts, (d) => d.balance))}</div><div class="muted small mt-s">${debts.length} debt${debts.length === 1 ? '' : 's'}</div></div>
+          </div>
+          ${plan.underMin ? `<p class="small warn">That's below your minimum payments (${m(plan.minTotal)}/month).</p>` : ''}
+          <table class="mt"><thead><tr><th>Order</th><th>Debt</th><th class="num">Owed</th><th class="num">Interest</th><th class="num">Paid off</th></tr></thead><tbody>
+          ${plan.debts.slice().sort((a, b) => a.paidOffMonth - b.paidOffMonth).map((d, i) => { const src = debts.find((x) => x.name === d.name);
+            return `<tr><td>${i + 1}</td><td>${esc(d.name)}${d.apr ? ` <span class="muted small">${d.apr}%/yr</span>` : ''}</td><td class="num">${m(src ? src.balance : 0)}</td><td class="num">${m(d.interest)}</td><td class="num"><b>${L.monthLabel(L.addMonths(thisMonth, d.paidOffMonth))}</b></td></tr>`; }).join('')}
+          </tbody></table>`}` : `<div class="empty">No debts with a total. In <a href="#" data-go="plan">Split plan</a>, set a <b>Total owed</b> on your debt categories.</div>`}
+        </div>`;
+    },
+
+    reports() {
+      const series = L.monthlySeries(state, reportRange || null);
+      const from = series[0].month + '-01';
+      const totIn = L.round2(L.sum(series, (r) => r.income)), totOut = L.round2(L.sum(series, (r) => r.out));
+      const byType = {}; series.forEach((r) => Object.entries(r.byType).forEach(([k, v]) => { byType[k] = (byType[k] || 0) + v; }));
+      const cats = L.spendingByCategory(state, from);
+      const catMax = Math.max(1, ...cats.map((c) => c.amount));
+      const lastMonth = L.addMonths(L.monthKey(today()), -1);
+      const reports = state.monthlyReports.slice().sort((a, b) => b.month.localeCompare(a.month));
+      return `<div class="row between"><div><h1>Reports</h1><p class="sub">Where your money came from and where it went.</p></div>
+          <div class="row wrap"><button class="btn" id="rpCsv">⬇ Export to Excel (CSV)</button><button class="btn primary" id="rpPrint">📄 Export PDF report</button></div></div>
+        <div class="tabs">${[[3, '3 months'], [6, '6 months'], [12, '12 months'], [0, 'All time']].map(([k, l]) => `<button data-range="${k}" class="${reportRange === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+        <div class="grid g3">
+          <div class="card stat"><div class="label">Income</div><div class="value good" data-count="${totIn}">${m(totIn)}</div><div class="muted small mt-s">${series.length} month${series.length === 1 ? '' : 's'}</div></div>
+          <div class="card stat"><div class="label">Money out</div><div class="value" data-count="${totOut}">${m(totOut)}</div><div class="muted small mt-s">spent, paid & invested</div></div>
+          <div class="card stat"><div class="label">Kept</div><div class="value ${totIn - totOut < 0 ? 'bad' : ''}">${totIn ? Math.round((totIn - totOut) / totIn * 100) : 0}%</div><div class="muted small mt-s">of income · ${m(totIn - totOut)} still in your buckets</div></div>
+        </div>
+        <div class="grid g2 mt">
+          <div class="card"><div class="row between"><h2>Income vs money out</h2><div class="legend" style="margin:0"><span><b class="lg-in"></b>Income</span><span><b class="lg-out"></b>Out</span></div></div>${barChart(series)}</div>
+          <div class="card"><h2>Balance over time</h2>${lineChart(series)}<p class="muted small" style="margin:6px 0 0">Total money left across all your buckets at the end of each month.</p></div>
+        </div>
+        <div class="grid g2 mt">
+          <div class="card"><h2>Top spending</h2>${cats.length ? cats.slice(0, 10).map((c) => `<div class="hbar"><div class="row between small"><span>${esc(c.name)} <span class="muted">${esc(c.section)}</span></span><b>${m(c.amount)}</b></div><div class="bar"><i style="width:${(c.amount / catMax) * 100}%;background:${c.color}"></i></div></div>`).join('') : '<div class="empty">No spending in this period.</div>'}</div>
+          <div class="card"><h2>By type</h2>${Object.keys(byType).length ? Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="hbar"><div class="row between small"><span>${L.SECTION_TYPES[k] ? L.SECTION_TYPES[k].label : k}</span><b>${m(v)} <span class="muted">${totOut ? Math.round(v / totOut * 100) : 0}%</span></b></div><div class="bar"><i style="width:${totOut ? v / totOut * 100 : 0}%"></i></div></div>`).join('') : '<div class="empty">Nothing yet.</div>'}</div>
+        </div>
+        <div class="card advice-card mt"><div class="row between"><h2>✦ Monthly AI report</h2><button class="btn sm primary" id="rpAi" ${aiBusy ? 'disabled' : ''}>${aiBusy ? 'Writing…' : `Write report for ${L.monthLabel(lastMonth)}`}</button></div>
+          ${reports.length ? reports.slice(0, 6).map((r) => `<details ${r === reports[0] ? 'open' : ''}><summary><b>${L.monthLabel(r.month)}</b> <span class="muted small">written ${fmtDate(r.date)}</span></summary><div class="advice mt-s">${esc(r.text)}</div></details>`).join('') : '<p class="muted small">Get a short review of last month: what went well, what didn’t, and three things to change.</p>'}
+        </div>`;
     },
 
     history() {
@@ -209,7 +411,7 @@
 
     settings() {
       const s = state.settings;
-      return `<h1>Settings</h1><p class="sub">Everything is stored only on this computer.</p>
+      return `<h1>Settings</h1><p class="sub">Everything is stored only on this device.</p>
         <div class="grid g2">
           <div class="card"><h2>AI advisor</h2>
             <label class="row small"><input type="checkbox" id="sAi" ${s.aiEnabled ? 'checked' : ''}> Enable AI advisor</label>
@@ -222,11 +424,24 @@
           <div>
             <div class="card"><h2>General</h2>
               <div class="form-grid">
+                <label class="f full">Your name (the advisor uses it)<input id="sName" value="${esc(s.userName || '')}" placeholder="Optional"></label>
                 <label class="f">Currency code<input id="sCur" value="${esc(s.currency)}"></label>
                 <label class="f">Currency symbol<input id="sSym" value="${esc(s.currencySymbol)}"></label>
-                <label class="f full">Payment methods (comma-separated)<input id="sMethods" value="${esc(s.paymentMethods.join(', '))}"></label>
+                <label class="f full">Lebanese lira rate (LBP per $1)<input id="sRate" type="number" min="1" step="1" value="${s.lbpRate}"></label>
               </div>
               <button class="btn primary mt" id="sSave">Save settings</button>
+            </div>
+            <div class="card mt"><h2>Theme</h2>
+              <div class="themes">${[['black', 'Black'], ['navy', 'Navy'], ['pink', 'Pink'], ['light', 'Light']].map(([k, l]) => `<button class="theme-swatch ${s.theme === k ? 'active' : ''}" data-theme-pick="${k}"><span class="sw sw-${k}"></span>${l}</button>`).join('')}</div>
+            </div>
+            <div class="card mt"><h2>Wallets</h2>
+              <p class="muted small" style="margin-top:0">Where your money physically is — cash, cards, bank. Starting balance = what was in it before you started using the app.</p>
+              ${s.wallets.map((w, i) => `<div class="wallet-edit"><input value="${esc(w.name)}" data-wname="${i}" placeholder="Wallet name"><div class="money-input" data-sym="${sym()}"><input type="number" step="0.01" value="${w.opening || 0}" data-wopen="${i}" title="Starting balance"></div><button class="icon-btn" data-wdel="${i}" title="Delete wallet">✕</button></div>`).join('')}
+              <div class="row mt-s"><button class="btn sm" id="wAdd">＋ Add wallet</button><button class="btn sm primary" id="wSave">Save wallets</button></div>
+            </div>
+            <div class="card mt"><h2>App lock</h2>
+              <p class="muted small" style="margin-top:0">${s.pinHash ? 'A PIN is required when the app opens.' : 'Ask for a 4-digit PIN every time the app opens.'}</p>
+              <div class="row">${s.pinHash ? '<button class="btn" id="pinChange">Change PIN</button><button class="btn ghost danger" id="pinOff">Turn off</button>' : '<button class="btn" id="pinOn">Set a PIN</button>'}</div>
             </div>
             <div class="card mt"><h2>Backup</h2>
               <p class="muted small" style="margin-top:0">Your data is stored only on this device and survives updates. Export a backup now and then anyway.</p>
@@ -262,8 +477,9 @@
   function activity() {
     const name = (sid, cid) => { const { section, category } = L.findCategory(state, sid, cid); return section ? `${section.name} → ${category ? category.name : '?'}` : '(deleted category)'; };
     const rows = [];
-    state.incomes.forEach((i) => rows.push({ kind: 'income', id: i.id, at: i.createdAt || 0, date: i.date, amount: i.amount, what: i.source || 'Income', note: i.note, detail: 'Split across your plan' }));
-    state.transactions.forEach((t) => rows.push({ kind: 'spend', id: t.id, at: t.createdAt || 0, date: t.date, amount: -t.amount, what: name(t.sectionId, t.categoryId), note: t.note, detail: t.method || '' }));
+    state.incomes.forEach((i) => rows.push({ kind: 'income', id: i.id, at: i.createdAt || 0, date: i.date, amount: i.amount, what: i.source || 'Income', note: i.note, detail: ['Into ' + walletName(i.walletId), i.original ? lbp(i.original.amount) : ''].filter(Boolean).join(' · ') }));
+    state.transactions.forEach((t) => rows.push({ kind: 'spend', id: t.id, at: t.createdAt || 0, date: t.date, amount: -t.amount, what: name(t.sectionId, t.categoryId), note: t.note, detail: [walletName(t.walletId), t.original ? lbp(t.original.amount) : ''].filter(Boolean).join(' · ') }));
+    state.walletTransfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${walletName(t.fromWalletId)}  ⇢  ${walletName(t.toWalletId)}`, note: t.note, detail: 'Wallet move', wallet: true }));
     state.transfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${name(t.from.sectionId, t.from.categoryId)}  ⇢  ${name(t.to.sectionId, t.to.categoryId)}`, note: t.note, detail: '' }));
     return rows.sort((a, b) => b.date.localeCompare(a.date) || b.at - a.at);
   }
@@ -273,7 +489,7 @@
     return `<table><thead><tr><th>Date</th><th>Type</th><th>What</th><th>Note</th><th class="num">Amount</th>${editable ? '<th></th>' : ''}</tr></thead><tbody>
       ${rows.map((r) => `<tr><td class="muted">${fmtDate(r.date)}</td><td>${pill[r.kind]}</td><td>${esc(r.what)}${r.detail ? `<div class="muted small">${esc(r.detail)}</div>` : ''}</td>
         <td class="muted">${esc(r.note || '')}</td><td class="num ${r.kind === 'income' ? 'good' : r.kind === 'spend' ? 'bad' : ''}">${r.kind === 'income' ? '+' : ''}${m(r.amount)}</td>
-        ${editable ? `<td class="num" style="white-space:nowrap"><button class="icon-btn" data-edit="${r.kind}|${r.id}" title="Edit">✎</button><button class="icon-btn" data-del="${r.kind}|${r.id}" title="Delete">✕</button></td>` : ''}</tr>`).join('')}
+        ${editable ? `<td class="num" style="white-space:nowrap">${r.wallet ? '' : `<button class="icon-btn" data-edit="${r.kind}|${r.id}" title="Edit">✎</button>`}<button class="icon-btn" data-del="${r.wallet ? 'wtransfer' : r.kind}|${r.id}" title="Delete">✕</button></td>` : ''}</tr>`).join('')}
     </tbody></table>`;
   }
 
@@ -307,14 +523,16 @@
   }
 
   function spendForm() {
-    const methods = state.settings.paymentMethods;
     return `<div class="grid g12"><div class="card">
       <label class="f">Which bucket is this from?<select id="spCat">${categoryOptions(spendForm.last)}</select></label>
       <div id="spAvail" class="small muted mt-s"></div>
-      <label class="f mt">Amount<div class="money-input" data-sym="${sym()}"><input class="big" id="spAmount" type="number" min="0" step="0.01" placeholder="0.00"></div></label>
+      <div class="row between mt"><span class="small muted">Amount</span>
+        <button class="btn sm" id="spScan" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Reading receipt…' : '📷 Scan receipt'}</button><input type="file" id="spScanFile" accept="image/*" capture="environment" class="hidden"></div>
+      <div class="amount-row mt-s"><input class="big" id="spAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('spCur')}</div>
+      <div class="small muted mt-s" id="spConv"></div>
       <div class="form-grid mt">
         <label class="f">Date<input id="spDate" type="date" value="${today()}"></label>
-        <label class="f">Paid with<select id="spMethod">${methods.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+        <label class="f">Paid from wallet<select id="spWallet">${walletOptions(spendForm.lastWallet)}</select></label>
         <label class="f full">Note<input id="spNote" placeholder="e.g. groceries, March installment"></label>
       </div>
       <button class="btn primary mt" id="spSave" style="width:100%">Save</button>
@@ -331,6 +549,42 @@
         <label class="f full">Note<input id="trNote" placeholder="Optional"></label>
       </div>
       <button class="btn primary mt" id="trSave">Move money</button></div>`;
+  }
+
+  function walletTransferForm() {
+    const ws = L.walletBalances(state);
+    return `<div class="card" style="max-width:640px">
+      <p class="muted small" style="margin-top:0">For example, withdrawing cash from your card. This only moves money between wallets — your buckets don't change.</p>
+      <div class="form-grid">
+        <label class="f">From<select id="wtFrom">${walletOptions()}</select></label>
+        <label class="f">To<select id="wtTo">${walletOptions(state.settings.wallets[1] && state.settings.wallets[1].id)}</select></label>
+        <label class="f">Amount<div class="amount-row"><input id="wtAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('wtCur')}</div></label>
+        <label class="f">Date<input id="wtDate" type="date" value="${today()}"></label>
+        <label class="f full">Note<input id="wtNote" placeholder="Optional"></label>
+      </div>
+      <button class="btn primary mt" id="wtSave">Move money</button>
+      <div class="wallets mt">${ws.map((w) => `<div class="wallet"><div class="muted small">${esc(w.name)}</div><div class="w-bal">${m(w.balance)}</div></div>`).join('')}</div></div>`;
+  }
+
+  function recurringPanel() {
+    const list = state.recurring;
+    return `<div class="grid g12"><div class="card"><h2>Add a recurring bill</h2>
+      <div class="form-grid">
+        <label class="f full">Name<input id="rcName" placeholder="e.g. Rent, Netflix, Car loan"></label>
+        <label class="f">Amount<div class="amount-row"><input id="rcAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('rcCur')}</div></label>
+        <label class="f">Day of the month<input id="rcDay" type="number" min="1" max="28" value="1"></label>
+        <label class="f full">From bucket<select id="rcCat">${categoryOptions()}</select></label>
+        <label class="f">Paid from wallet<select id="rcWallet">${walletOptions()}</select></label>
+        <label class="f">When it's due<select id="rcAuto"><option value="1">Log it automatically</option><option value="0">Remind me, I'll confirm</option></select></label>
+      </div>
+      <button class="btn primary mt" id="rcSave">Add bill</button></div>
+      <div class="card"><h2>Your recurring bills</h2>
+      ${list.length ? `<table><thead><tr><th>Bill</th><th>Day</th><th class="num">Amount</th><th></th></tr></thead><tbody>${list.map((r) => {
+        const { section, category } = L.findCategory(state, r.sectionId, r.categoryId);
+        return `<tr><td>${esc(r.name)}<div class="muted small">${section ? esc(section.name + ' → ' + category.name) : '(deleted bucket)'} · ${esc(walletName(r.walletId))} · ${r.auto ? 'automatic' : 'reminder'}${r.lastLogged === L.monthKey(today()) ? ' · ✓ this month' : ''}</div></td>
+          <td>${ord(r.day)}</td><td class="num">${m(r.amount)}</td><td class="num"><button class="icon-btn" data-delrc="${r.id}" title="Delete">✕</button></td></tr>`;
+      }).join('')}</tbody></table>` : '<div class="empty">No recurring bills yet.</div>'}
+      <p class="muted small">Automatic bills are logged the first time you open the app on or after their day. Reminders show on the dashboard (and as a notification) until you mark them paid.</p></div></div>`;
   }
 
   function bucketStatus(value) {
@@ -389,26 +643,38 @@
   }
 
   function bind() {
-    $$('[data-go]').forEach((b) => (b.onclick = () => go(b.dataset.go)));
-    const handlers = { dashboard: bindDashboard, income: bindIncome, spend: bindSpend, plan: bindPlan, history: bindHistory, advisor: bindAdvisor, settings: bindSettings };
+    $$('[data-go]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); go(b.dataset.go); }));
+    const handlers = { dashboard: bindDashboard, income: bindIncome, spend: bindSpend, plan: bindPlan, goals: bindGoals, reports: bindReports, history: bindHistory, advisor: bindAdvisor, settings: bindSettings };
     handlers[page]();
   }
 
   function bindDashboard() {
+    $$('[data-paydue]').forEach((b) => (b.onclick = async () => {
+      const r = state.recurring.find((x) => x.id === b.dataset.paydue); if (!r) return;
+      const tx = L.recurringTx(r, today()); state.transactions.push(tx); r.lastLogged = L.monthKey(today());
+      await persist(); toast(L.paymentMessage(state, tx)); render();
+    }));
     $$('[data-reask]').forEach((b) => (b.onclick = () => { const inc = state.incomes.find((i) => i.id === b.dataset.reask); if (inc) adviseOnIncome(inc); }));
   }
 
   function bindIncome() {
-    const refresh = () => { $('#incPreview').innerHTML = incomePreviewHtml(Number($('#incAmount').value), incomeOverrides()); bindOverrides(); };
+    const amt = () => readAmount('#incAmount', '#incCur').usd;
+    const refresh = () => {
+      const a = readAmount('#incAmount', '#incCur');
+      $('#incConv').textContent = a.cur === 'LBP' && a.raw ? `${lbp(a.raw)} = ${m(a.usd)} at ${state.settings.lbpRate.toLocaleString('en-US')} LBP per $1` : '';
+      $('#incPreview').innerHTML = incomePreviewHtml(a.usd, incomeOverrides()); bindOverrides();
+    };
     const bindOverrides = () => $$('[data-ov]').forEach((el) => (el.oninput = () => {
       const o = incomeOverrides(); const pos = el.dataset.ov;
-      $('#incPreview').innerHTML = incomePreviewHtml(Number($('#incAmount').value), o); bindOverrides();
+      $('#incPreview').innerHTML = incomePreviewHtml(amt(), o); bindOverrides();
       const again = $(`[data-ov="${pos}"]`); if (again) { again.focus(); const v = again.value; again.value = ''; again.value = v; }
     }));
     $('#incAmount').oninput = refresh;
+    $('#incCur').onchange = refresh;
     $('#incCustom').onchange = refresh;
     $('#incSave').onclick = async () => {
-      const amount = L.round2($('#incAmount').value);
+      const amt0 = readAmount('#incAmount', '#incCur');
+      const amount = amt0.usd;
       const err = $('#incErr');
       if (!(amount > 0)) { err.textContent = 'Enter an amount greater than zero.'; return; }
       const v = L.validatePlan(state.sections);
@@ -416,7 +682,7 @@
       const ov = incomeOverrides();
       if (ov) { const t = L.round2(L.sum(Object.values(ov))); if (Math.abs(t - 100) > 0.001) { err.textContent = `Section percentages add up to ${t}% — they need to total 100%.`; return; } }
       const split = L.splitIncome(amount, state.sections, ov);
-      const income = { id: L.uid('inc'), createdAt: Date.now(), date: $('#incDate').value || today(), amount, source: $('#incSource').value.trim(), note: $('#incNote').value.trim(), allocations: split.allocations, advice: '' };
+      const income = { id: L.uid('inc'), createdAt: Date.now(), date: $('#incDate').value || today(), amount, walletId: $('#incWallet').value, original: amt0.original, source: $('#incSource').value.trim(), note: $('#incNote').value.trim(), allocations: split.allocations, advice: '' };
       state.incomes.push(income);
       await persist();
       lastIncomeId = income.id;
@@ -430,16 +696,48 @@
     if (spendTab === 'spend') {
       const upd = () => { spendForm.last = $('#spCat').value; $('#spStatus').innerHTML = bucketStatus($('#spCat').value); };
       $('#spCat').onchange = upd; upd();
+      const conv = () => { const a = readAmount('#spAmount', '#spCur'); $('#spConv').textContent = a.cur === 'LBP' && a.raw ? `${lbp(a.raw)} = ${m(a.usd)}` : ''; };
+      $('#spAmount').oninput = conv; $('#spCur').onchange = conv;
+      $('#spWallet').onchange = () => { spendForm.lastWallet = $('#spWallet').value; };
+      $('#spScan').onclick = () => $('#spScanFile').click();
+      $('#spScanFile').onchange = () => { const f = $('#spScanFile').files[0]; if (f) scanReceipt(f); };
       $('#spSave').onclick = async () => {
-        const amount = L.round2($('#spAmount').value);
+        const a = readAmount('#spAmount', '#spCur');
+        const amount = a.usd;
         if (!(amount > 0)) return toast('Enter an amount greater than zero.', true);
         const [sectionId, categoryId] = $('#spCat').value.split('|');
-        const tx = { id: L.uid('tx'), createdAt: Date.now(), date: $('#spDate').value || today(), sectionId, categoryId, amount, method: $('#spMethod').value, note: $('#spNote').value.trim() };
+        const tx = { id: L.uid('tx'), createdAt: Date.now(), date: $('#spDate').value || today(), sectionId, categoryId, amount, original: a.original, walletId: $('#spWallet').value, method: walletName($('#spWallet').value), note: $('#spNote').value.trim() };
         state.transactions.push(tx);
         await persist();
         lastPaymentMsg = L.paymentMessage(state, tx);
         render();
       };
+    } else if (spendTab === 'wallet') {
+      $('#wtSave').onclick = async () => {
+        const a = readAmount('#wtAmount', '#wtCur');
+        if (!(a.usd > 0)) return toast('Enter an amount greater than zero.', true);
+        if ($('#wtFrom').value === $('#wtTo').value) return toast('Pick two different wallets.', true);
+        state.walletTransfers.push({ id: L.uid('wt'), createdAt: Date.now(), date: $('#wtDate').value || today(), fromWalletId: $('#wtFrom').value, toWalletId: $('#wtTo').value, amount: a.usd, original: a.original, note: $('#wtNote').value.trim() });
+        await persist();
+        lastPaymentMsg = `${m(a.usd)} moved from ${walletName($('#wtFrom').value)} to ${walletName($('#wtTo').value)}.`;
+        render();
+      };
+    } else if (spendTab === 'recurring') {
+      $('#rcSave').onclick = async () => {
+        const a = readAmount('#rcAmount', '#rcCur');
+        const name = $('#rcName').value.trim();
+        if (!name) return toast('Give the bill a name.', true);
+        if (!(a.usd > 0)) return toast('Enter an amount greater than zero.', true);
+        const [sectionId, categoryId] = $('#rcCat').value.split('|');
+        const day = Math.min(28, Math.max(1, Number($('#rcDay').value) || 1));
+        if ($('#rcAuto').value === '0') { try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {} }
+        state.recurring.push({ id: L.uid('rc'), name, amount: a.usd, sectionId, categoryId, walletId: $('#rcWallet').value, day, auto: $('#rcAuto').value === '1', lastLogged: Number(today().slice(8, 10)) >= day ? L.monthKey(today()) : '' });
+        await persist(); toast(`${name} added — next one on the ${ord(day)}.`); render();
+      };
+      $$('[data-delrc]').forEach((b) => (b.onclick = async () => {
+        if (!(await confirmBox('Delete recurring bill?', 'Past payments stay in History.', 'Delete'))) return;
+        state.recurring = state.recurring.filter((r) => r.id !== b.dataset.delrc); await persist(); render();
+      }));
     } else {
       $('#trSave').onclick = async () => {
         const amount = L.round2($('#trAmount').value);
@@ -462,7 +760,7 @@
       el.addEventListener(evt, () => {
         const s = draftPlan[+el.dataset.s]; const k = el.dataset.k;
         const target = el.dataset.c != null ? s.categories[+el.dataset.c] : s;
-        target[k] = ['percent', 'target'].includes(k) ? (el.value === '' ? 0 : Number(el.value)) : el.value;
+        target[k] = ['percent', 'target', 'apr', 'minPayment'].includes(k) ? (el.value === '' ? 0 : Number(el.value)) : el.value;
         if (k === 'percent' || k === 'color' || k === 'type') {
           const id = el.dataset.s + '-' + (el.dataset.c || '') + '-' + k;
           rerender();
@@ -503,7 +801,7 @@
 
   function bindHistory() {
     $$('[data-filter]').forEach((b) => (b.onclick = () => { historyFilter = b.dataset.filter; render(); }));
-    const listOf = { income: 'incomes', spend: 'transactions', transfer: 'transfers' };
+    const listOf = { income: 'incomes', spend: 'transactions', transfer: 'transfers', wtransfer: 'walletTransfers' };
     $$('[data-del]').forEach((b) => (b.onclick = async () => {
       const [kind, id] = b.dataset.del.split('|');
       const msg = kind === 'income' ? 'Deleting an income also removes the money it added to every bucket.' : 'This entry will be removed and the bucket balance restored.';
@@ -519,8 +817,8 @@
           <label class="f">Amount<input id="eAmount" type="number" step="0.01" value="${item.amount}"></label>
           <label class="f">Date<input id="eDate" type="date" value="${item.date.slice(0, 10)}"></label>
           ${kind === 'spend' ? `<label class="f full">Bucket<select id="eCat">${categoryOptions(item.sectionId + '|' + item.categoryId)}</select></label>
-            <label class="f">Paid with<select id="eMethod">${state.settings.paymentMethods.map((x) => `<option ${x === item.method ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>` : ''}
-          ${kind === 'income' ? `<label class="f">Source<input id="eSource" value="${esc(item.source || '')}"></label>` : ''}
+            <label class="f">Wallet<select id="eWallet">${walletOptions(item.walletId)}</select></label>` : ''}
+          ${kind === 'income' ? `<label class="f">Source<input id="eSource" value="${esc(item.source || '')}"></label><label class="f">Wallet<select id="eWallet">${walletOptions(item.walletId)}</select></label>` : ''}
           <label class="f full">Note<input id="eNote" value="${esc(item.note || '')}"></label>
         </div>
         ${kind === 'income' ? '<p class="muted small">Changing the amount re-splits it using the same proportions it was originally split with.</p>' : ''}
@@ -534,9 +832,10 @@
             const parts = L.distribute(amount, item.allocations.map((a) => a.amount || 0.0001));
             item.allocations.forEach((a, i) => (a.amount = parts[i]));
           }
+          if (amount !== item.amount) item.original = null;
           item.amount = amount; item.date = $('#eDate', el).value || item.date; item.note = $('#eNote', el).value.trim();
-          if (kind === 'spend') { const [s, c] = $('#eCat', el).value.split('|'); item.sectionId = s; item.categoryId = c; item.method = $('#eMethod', el).value; }
-          if (kind === 'income') item.source = $('#eSource', el).value.trim();
+          if (kind === 'spend') { const [s, c] = $('#eCat', el).value.split('|'); item.sectionId = s; item.categoryId = c; item.walletId = $('#eWallet', el).value; item.method = walletName(item.walletId); }
+          if (kind === 'income') { item.source = $('#eSource', el).value.trim(); item.walletId = $('#eWallet', el).value; }
           await persist(); close(); render(); toast('Saved.');
         };
       });
@@ -568,8 +867,8 @@
       s.aiEnabled = $('#sAi').checked; s.autoAdviceOnIncome = $('#sAuto').checked;
       s.apiKey = $('#sKey').value.trim(); s.model = $('#sModel').value.trim() || 'claude-sonnet-5-5';
       s.aboutMe = $('#sAbout').value.trim(); s.currency = $('#sCur').value.trim() || 'USD'; s.currencySymbol = $('#sSym').value || '$';
-      const methods = $('#sMethods').value.split(',').map((x) => x.trim()).filter(Boolean);
-      s.paymentMethods = methods.length ? methods : ['Cash'];
+      s.userName = $('#sName').value.trim(); s.lbpRate = Math.max(1, Number($('#sRate').value) || 89500);
+      if ($('#sModel').value.trim() !== 'claude-haiku-5-5') s.modelChosen = true;
       await persist(); toast('Settings saved.');
     };
     $('#bExport').onclick = async () => { const p = await api.exportData(state); if (p) toast('Backup saved to ' + p); };
@@ -587,6 +886,29 @@
       await persist(); toast('Reset done.'); render();
     };
     $('#uCheck').onclick = () => { manualUpdateCheck = true; api.checkUpdates(); };
+    $$('[data-theme-pick]').forEach((b) => (b.onclick = async () => { state.settings.theme = b.dataset.themePick; applyTheme(); await persist(); render(); }));
+    const readWallets = () => state.settings.wallets.map((w, i) => Object.assign({}, w, { name: ($(`[data-wname="${i}"]`).value || '').trim() || w.name, opening: Number($(`[data-wopen="${i}"]`).value) || 0 }));
+    $('#wAdd').onclick = () => { state.settings.wallets = readWallets(); state.settings.wallets.push({ id: L.uid('w'), name: 'New wallet', opening: 0 }); render(); };
+    $('#wSave').onclick = async () => { state.settings.wallets = readWallets(); await persist(); toast('Wallets saved.'); render(); };
+    $$('[data-wdel]').forEach((b) => (b.onclick = async () => {
+      const i = +b.dataset.wdel, w = state.settings.wallets[i];
+      if (state.settings.wallets.length === 1) return toast('You need at least one wallet.', true);
+      const used = state.transactions.some((t) => t.walletId === w.id) || state.incomes.some((t) => t.walletId === w.id);
+      if (used && !(await confirmBox('Delete wallet?', `"${w.name}" has history. Its entries will move to "${state.settings.wallets[i === 0 ? 1 : 0].name}".`, 'Delete'))) return;
+      const to = state.settings.wallets[i === 0 ? 1 : 0].id;
+      state.transactions.forEach((t) => { if (t.walletId === w.id) t.walletId = to; });
+      state.incomes.forEach((t) => { if (t.walletId === w.id) t.walletId = to; });
+      state.recurring.forEach((t) => { if (t.walletId === w.id) t.walletId = to; });
+      state.walletTransfers = state.walletTransfers.filter((t) => t.fromWalletId !== w.id && t.toWalletId !== w.id);
+      state.settings.wallets.splice(i, 1); await persist(); render();
+    }));
+    const setPin = () => pinDialog('Choose a 4-digit PIN', async (pin1) => pinDialog('Type it again', async (pin2) => {
+      if (pin1 !== pin2) { toast("PINs didn't match. Try again.", true); return; }
+      state.settings.pinHash = await sha(pin1); await persist(); toast('PIN set. Don\'t forget it — it can\'t be recovered.'); render();
+    }));
+    if ($('#pinOn')) $('#pinOn').onclick = setPin;
+    if ($('#pinChange')) $('#pinChange').onclick = setPin;
+    if ($('#pinOff')) $('#pinOff').onclick = async () => { state.settings.pinHash = ''; await persist(); toast('PIN turned off.'); render(); };
   }
 
   // ---------------- Updates ----------------
@@ -605,6 +927,98 @@
     if (manualUpdateCheck && ['none', 'error', 'dev'].includes(u.status)) { toast(text, u.status === 'error'); manualUpdateCheck = false; }
     if (u.status === 'none') setTimeout(() => pill.classList.add('hidden'), 10);
   });
+
+  function bindGoals() {
+    $$('[data-extra]').forEach((el) => (el.oninput = () => {
+      const id = el.dataset.extra; goalExtras[id] = Number(el.value) || 0;
+      const g = L.goalTimelines(state, goalExtras).find((x) => x.categoryId === id); const box = el.closest('.goal');
+      $('.g-extra-label', box).textContent = m(g.extra);
+      $('.g-eta', box).innerHTML = g.left <= 0 ? '<b class="good">Goal reached 🎉</b>' : g.months == null ? '<span class="warn">Not growing yet</span>' : `<b>${g.months}</b> month${g.months === 1 ? '' : 's'} left · <b>${L.monthLabel(g.eta)}</b>`;
+    }));
+    $$('[data-extra]').forEach((el) => (el.onchange = () => { const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; }));
+    if ($('#dbBudget')) $('#dbBudget').onchange = () => { debtBudget = Math.max(0, Number($('#dbBudget').value) || 0); const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; };
+    $$('[data-strat]').forEach((b) => (b.onclick = () => { debtStrategy = b.dataset.strat; const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; }));
+  }
+
+  function bindReports() {
+    $$('[data-range]').forEach((b) => (b.onclick = () => { reportRange = Number(b.dataset.range); render(); animateEntrance(); }));
+    $('#rpCsv').onclick = async () => {
+      const csv = L.toCSV(state), name = `leons-ledger-${today()}.csv`;
+      if (api.exportCSV) { const p = await api.exportCSV(name, csv); if (p) toast('Saved to ' + p); return; }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    };
+    $('#rpPrint').onclick = async () => {
+      const html = window.LedgerReport.build(state, L, { months: reportRange, logoSvg: $('.brand .logo').innerHTML });
+      const name = `Leons-Ledger-report-${today()}.pdf`;
+      if (api.exportPDF) { toast('Creating your PDF…'); const p = await api.exportPDF(html, name); if (p) toast('PDF saved to ' + p); return; }
+      // phone / browser: print the designed report (choose "Save as PDF")
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+      document.body.appendChild(f);
+      f.onload = () => { setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 60000); }, 300); };
+      f.srcdoc = html;
+    };
+    $('#rpAi').onclick = async () => {
+      const month = L.addMonths(L.monthKey(today()), -1);
+      const r = L.monthlySeries(state, 2)[0];
+      const cats = L.spendingByCategory(state, month + '-01', month + '-31').slice(0, 8).map((c) => `${c.name} (${c.section}) ${m(c.amount)}`).join('; ');
+      aiBusy = true; render();
+      const res = await askAdvisor([{ role: 'user', content: `Write my monthly money report for ${L.monthLabel(month)}. That month: income ${m(r.income)}, money out ${m(r.out)}, net ${m(r.net)}. Top spending: ${cats || 'none logged'}. Structure it as: a one-line summary, what went well, what didn't, and exactly three specific things to do this month. Keep it short.` }]);
+      state.monthlyReports = state.monthlyReports.filter((x) => x.month !== month);
+      state.monthlyReports.push({ month, text: res.text, date: today() });
+      aiBusy = false; await persist(); render();
+    };
+  }
+
+  // ---------------- PIN lock ----------------
+  async function sha(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('leons-ledger:' + text));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  function keypad(title, onDone, opts) {
+    const root = opts && opts.lock ? $('#lockRoot') : $('#modalRoot');
+    let pin = '';
+    root.innerHTML = `<div class="${opts && opts.lock ? 'lock-screen' : 'modal-bg'}"><div class="pin-box">
+      ${opts && opts.lock ? `<div class="logo lock-logo">${$('.brand .logo').innerHTML}</div>` : ''}
+      <h2>${esc(title)}</h2><div class="pin-dots">${'<i></i>'.repeat(4)}</div><div class="pin-err small bad"></div>
+      <div class="pin-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map((k) => k === '' ? '<span></span>' : `<button class="btn pin-key" data-k="${k}">${k}</button>`).join('')}</div>
+      ${opts && opts.lock ? '' : '<button class="btn ghost mt" data-x>Cancel</button>'}</div></div>`;
+    const box = $('.pin-box', root);
+    const draw = () => $$('.pin-dots i', box).forEach((d, i) => d.classList.toggle('on', i < pin.length));
+    const press = async (k) => {
+      if (k === '⌫') pin = pin.slice(0, -1); else if (pin.length < 4) pin += k;
+      draw();
+      if (pin.length === 4) { const p = pin; pin = ''; const ok = await onDone(p); if (ok === false) { $('.pin-err', box).textContent = 'Wrong PIN'; box.classList.add('shake'); setTimeout(() => { box.classList.remove('shake'); draw(); }, 400); } }
+    };
+    $$('.pin-key', box).forEach((b) => (b.onclick = () => press(b.dataset.k)));
+    const onKey = (e) => { if (!root.contains(box)) return document.removeEventListener('keydown', onKey); if (/^[0-9]$/.test(e.key)) press(e.key); if (e.key === 'Backspace') press('⌫'); };
+    document.addEventListener('keydown', onKey);
+    if ($('[data-x]', root)) $('[data-x]', root).onclick = () => { root.innerHTML = ''; };
+    return () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+  }
+  function pinDialog(title, cb) { const close = keypad(title, async (p) => { close(); await cb(p); }); }
+  function lockScreen() {
+    return new Promise((resolve) => {
+      const close = keypad('Enter your PIN', async (p) => { if ((await sha(p)) === state.settings.pinHash) { close(); resolve(); return true; } return false; }, { lock: true });
+    });
+  }
+
+  // ---------------- Recurring bills ----------------
+  async function processRecurring() {
+    const due = L.dueRecurring(state);
+    let changed = false;
+    for (const r of due) {
+      if (r.auto) {
+        const tx = L.recurringTx(r, today()); state.transactions.push(tx); r.lastLogged = L.monthKey(today()); changed = true;
+        toast(`${r.name}: ${m(r.amount)} logged automatically.`);
+      } else if (!r.notified || r.notified !== today()) {
+        r.notified = today(); changed = true;
+        try { if (window.Notification && Notification.permission === 'granted') new Notification("Bill due — Leon's Ledger", { body: `${r.name}: ${m(r.amount)}`, icon: 'icons/icon-192.png' }); } catch (_) {}
+      }
+    }
+    if (changed) await persist();
+    return changed;
+  }
 
   // ---------------- Pointer effects: cursor light + ripples ----------------
   let pointerFrame = 0, lastEvt = null;
@@ -637,10 +1051,14 @@
   $$('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.page)));
   (async () => {
     state = L.migrate(await api.load());
+    applyTheme();
+    if (state.settings.pinHash) await lockScreen();
+    await processRecurring();
     await persist();
     const v = await api.version();
     $('#versionLabel').textContent = 'v' + v;
     render();
     animateEntrance();
+    setInterval(async () => { if (await processRecurring()) render(); }, 30 * 60 * 1000);
   })();
 })();

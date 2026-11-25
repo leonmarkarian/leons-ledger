@@ -14,6 +14,17 @@ Your data is saved in `%APPDATA%\Leon's Ledger\ledger.json`. The app also keeps 
 
 Without a key, the app gives offline rule-based tips instead.
 
+## Features
+- Income splitting into sections and categories, spend/pay with "paid / remaining" messages, moves between buckets
+- **Wallets** (cash, cards, bank) with balances and wallet-to-wallet moves
+- **USD or Lebanese lira** entry with your own exchange rate
+- **Receipt scanning**: take a photo and the AI fills in the amount, date, shop and category
+- **Recurring bills**: logged automatically, or as reminders with notifications
+- **Goals & debts**: when each goal will be reached (with an "extra per month" slider), and a debt payoff planner (avalanche vs snowball)
+- **Reports**: income vs money out, balance over time, top spending, by-type breakdown, monthly AI report
+- **Export**: a designed PDF report, plus CSV that opens in Excel
+- **Themes** (Black, Navy, Pink, Light), **PIN lock**, and a separate business budget
+
 ## How it works
 - **Split plan**: each section gets a % of every income, and each category gets a % of its section. Both levels must add up to 100%. You can add, rename, recolor and delete sections and categories. Set a section's type to Spending, Savings, Debt, Investment or Other. For debts, enter the **total owed**. For savings, enter a **goal**.
 - **Log income**: enter the amount and see the split preview. You can tick the box to use different percentages for this one payment only.
