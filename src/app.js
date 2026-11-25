@@ -37,7 +37,7 @@
     t.className = 'toast' + (isErr ? ' err' : '');
     t.textContent = text;
     $('#toasts').appendChild(t);
-    setTimeout(() => t.remove(), 5200);
+    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 400); }, 5000);
   }
 
   function modal(html, onMount) {
@@ -109,9 +109,9 @@
         <div class="row between"><div><h1>Dashboard</h1><p class="sub">Where your money is right now.</p></div>
           <div class="row"><button class="btn" data-go="spend">− Spend / Pay</button><button class="btn primary" data-go="income">＋ Log income</button></div></div>
         <div class="grid g3">
-          <div class="card stat"><div class="label">Available across all buckets</div><div class="value ${b.totalAvailable < 0 ? 'bad' : ''}">${m(b.totalAvailable)}</div></div>
-          <div class="card stat"><div class="label">Total income logged</div><div class="value good">${m(b.totalIncome)}</div><div class="muted small mt-s">${state.incomes.length} payment${state.incomes.length === 1 ? '' : 's'}</div></div>
-          <div class="card stat"><div class="label">Spent & paid</div><div class="value">${m(b.totalSpent)}</div><div class="muted small mt-s">${state.transactions.length} entr${state.transactions.length === 1 ? 'y' : 'ies'}</div></div>
+          <div class="card stat"><div class="label">Available across all buckets</div><div class="value ${b.totalAvailable < 0 ? 'bad' : ''}" data-count="${b.totalAvailable}">${m(b.totalAvailable)}</div></div>
+          <div class="card stat"><div class="label">Total income logged</div><div class="value good" data-count="${b.totalIncome}">${m(b.totalIncome)}</div><div class="muted small mt-s">${state.incomes.length} payment${state.incomes.length === 1 ? '' : 's'}</div></div>
+          <div class="card stat"><div class="label">Spent & paid</div><div class="value" data-count="${b.totalSpent}">${m(b.totalSpent)}</div><div class="muted small mt-s">${state.transactions.length} entr${state.transactions.length === 1 ? 'y' : 'ies'}</div></div>
         </div>
         <div class="card mt"><div class="row between"><h2>Your split plan</h2><button class="btn sm ghost" data-go="plan">Edit plan</button></div>
           <div class="split-bar">${state.sections.map((s) => `<i style="width:${s.percent}%;background:${s.color}" title="${esc(s.name)} ${s.percent}%"></i>`).join('')}</div>
@@ -364,6 +364,28 @@
     if (p !== 'spend') lastPaymentMsg = null;
     if (p !== 'income') lastIncomeId = null;
     page = p; render(); $('#main').scrollTop = 0;
+    animateEntrance();
+  }
+
+  function animateEntrance() {
+    const main = $('#main');
+    main.classList.remove('page-enter'); void main.offsetWidth; main.classList.add('page-enter');
+    clearTimeout(animateEntrance.t);
+    animateEntrance.t = setTimeout(() => main.classList.remove('page-enter'), 1300);
+    $$('[data-count]').forEach(countUp);
+  }
+
+  function countUp(el) {
+    const target = Number(el.dataset.count) || 0;
+    if (!target || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const start = performance.now(), dur = 900;
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / dur), e = 1 - Math.pow(1 - t, 3);
+      if (!el.isConnected) return;
+      el.textContent = m(target * e);
+      if (t < 1) requestAnimationFrame(step); else el.textContent = m(target);
+    };
+    requestAnimationFrame(step);
   }
 
   function bind() {
@@ -583,6 +605,33 @@
     if (u.status === 'none') setTimeout(() => pill.classList.add('hidden'), 10);
   });
 
+  // ---------------- Pointer effects: cursor light + ripples ----------------
+  let pointerFrame = 0, lastEvt = null;
+  document.addEventListener('mousemove', (e) => {
+    lastEvt = e;
+    if (pointerFrame) return;
+    pointerFrame = requestAnimationFrame(() => {
+      pointerFrame = 0;
+      const el = lastEvt.target.closest && lastEvt.target.closest('.btn, nav button, .tabs button, .card, .plan-sec');
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      el.style.setProperty('--mx', (lastEvt.clientX - r.left) + 'px');
+      el.style.setProperty('--my', (lastEvt.clientY - r.top) + 'px');
+      const card = el.closest('.card, .plan-sec');
+      if (card && card !== el) { const c = card.getBoundingClientRect(); card.style.setProperty('--mx', (lastEvt.clientX - c.left) + 'px'); card.style.setProperty('--my', (lastEvt.clientY - c.top) + 'px'); }
+    });
+  }, { passive: true });
+  document.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest && e.target.closest('.btn, nav button, .tabs button');
+    if (!b || b.disabled) return;
+    const r = b.getBoundingClientRect(), size = Math.max(r.width, r.height);
+    const span = document.createElement('span');
+    span.className = 'ripple';
+    span.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+    b.appendChild(span);
+    setTimeout(() => span.remove(), 650);
+  });
+
   // ---------------- Boot ----------------
   $$('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.page)));
   (async () => {
@@ -591,5 +640,6 @@
     const v = await api.version();
     $('#versionLabel').textContent = 'v' + v;
     render();
+    animateEntrance();
   })();
 })();
