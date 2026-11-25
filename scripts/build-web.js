@@ -24,7 +24,7 @@ html = html
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <meta name="apple-mobile-web-app-title" content="Ledger" />`)
   .replace('<script src="logic.js"></script>', `<script src="web-api.js?v=${version}"></script>\n  <script src="logic.js?v=${version}"></script>`)
   .replace('<script src="app.js"></script>', `<script src="app.js?v=${version}"></script>`);
@@ -38,8 +38,8 @@ fs.writeFileSync(path.join(out, 'manifest.webmanifest'), JSON.stringify({
   scope: './',
   display: 'standalone',
   orientation: 'portrait',
-  background_color: '#fbd9e6',
-  theme_color: '#fbd9e6',
+  background_color: '#000000',
+  theme_color: '#000000',
   icons: [
     { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
     { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
