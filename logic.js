@@ -13,6 +13,7 @@
     save:   { label: 'Savings',    verb: 'moved out of',   past: 'Withdrawn' },
     debt:   { label: 'Debt',       verb: 'paid for',       past: 'Paid' },
     invest: { label: 'Investment', verb: 'invested in',    past: 'Invested' },
+    business: { label: 'Business', verb: 'spent from',   past: 'Spent' },
     other:  { label: 'Other',      verb: 'used from',      past: 'Used' }
   };
 
@@ -36,7 +37,11 @@
         currency: 'USD',
         currencySymbol: '$',
         apiKey: '',
-        model: 'claude-sonnet-5-5',
+        model: 'claude-haiku-5-5',
+        theme: 'black',
+        pinHash: '',
+        lbpRate: 89500,
+        wallets: [{ id: 'w_cash', name: 'Cash', opening: 0 }, { id: 'w_wish', name: 'Wish Money card', opening: 0 }],
         aiEnabled: true,
         autoAdviceOnIncome: true,
         paymentMethods: ['Cash', 'Wish Money card'],
@@ -56,12 +61,15 @@
           cat('Example debt (rename me)', 100, { target: 1000 })] },
         { id: uid('sec'), name: 'Investments', type: 'invest', percent: 15, color: PALETTE[4], categories: [
           cat('Long-term', 70), cat('Short-term', 30)] },
-        { id: uid('sec'), name: 'Business', type: 'other', percent: 5, color: PALETTE[5], categories: [
+        { id: uid('sec'), name: 'Business', type: 'business', percent: 5, color: PALETTE[5], categories: [
           cat('Capital', 100)] }
       ],
       incomes: [],       // {id,date,amount,source,note,allocations:[{sectionId,categoryId,amount}],advice}
       transactions: [],  // {id,date,sectionId,categoryId,amount,method,note}
       transfers: [],     // {id,date,from:{sectionId,categoryId},to:{...},amount,note}
+      walletTransfers: [], // {id,date,fromWalletId,toWalletId,amount,note}
+      recurring: [],     // {id,name,amount,sectionId,categoryId,walletId,day,auto,lastLogged:'YYYY-MM'}
+      monthlyReports: [],// {month:'YYYY-MM', text, date}
       chat: []           // {role:'user'|'assistant', content, date}
     };
   }
@@ -72,11 +80,22 @@
     if (!state || typeof state !== 'object') return base;
     const s = Object.assign({}, base, state);
     s.settings = Object.assign({}, base.settings, state.settings || {});
-    ['incomes', 'transactions', 'transfers', 'chat'].forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
+    ['incomes', 'transactions', 'transfers', 'walletTransfers', 'recurring', 'monthlyReports', 'chat'].forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
+    // wallets: older versions only had a list of payment-method names
+    if (!Array.isArray(state.settings && state.settings.wallets) || !state.settings.wallets.length) {
+      const names = (state.settings && state.settings.paymentMethods) || ['Cash', 'Wish Money card'];
+      s.settings.wallets = names.map((n, i) => ({ id: 'w_' + i + '_' + String(n).toLowerCase().replace(/[^a-z0-9]+/g, ''), name: n, opening: 0 }));
+    }
+    const wByName = {}; s.settings.wallets.forEach((w) => { wByName[w.name] = w.id; });
+    s.transactions.forEach((t) => { if (!t.walletId) t.walletId = wByName[t.method] || s.settings.wallets[0].id; });
+    s.incomes.forEach((i) => { if (!i.walletId) i.walletId = s.settings.wallets[0].id; });
+    if (s.settings.model === 'claude-sonnet-5-5' && !(state.settings && state.settings.modelChosen)) s.settings.model = 'claude-haiku-5-5';
+    s.settings.lbpRate = Number(s.settings.lbpRate) || 89500;
     if (!Array.isArray(s.sections) || !s.sections.length) s.sections = base.sections;
     s.sections.forEach((sec, i) => {
       sec.id = sec.id || uid('sec');
       sec.type = SECTION_TYPES[sec.type] ? sec.type : 'other';
+      if (sec.type === 'other' && /^business$/i.test(sec.name || '')) sec.type = 'business';
       sec.color = sec.color || PALETTE[i % PALETTE.length];
       sec.percent = Number(sec.percent) || 0;
       sec.categories = Array.isArray(sec.categories) && sec.categories.length ? sec.categories : [cat('General', 100)];
@@ -85,6 +104,8 @@
         c.percent = Number(c.percent) || 0;
         c.target = Number(c.target) || 0;
         c.note = c.note || '';
+        c.apr = Number(c.apr) || 0;
+        c.minPayment = Number(c.minPayment) || 0;
       });
     });
     s.schemaVersion = SCHEMA_VERSION;
@@ -264,7 +285,163 @@
     return tips.join('\n\n') + '\n\n(Offline tips — add an Anthropic API key in Settings for personalised AI advice.)';
   }
 
+
+  // ---------- Dates ----------
+  const monthKey = (d) => String(d).slice(0, 7);
+  function localToday() { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  function addMonths(ym, n) { const [y, mo] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, mo - 1 + n, 1)); return d.toISOString().slice(0, 7); }
+  function monthLabel(ym) { const [y, mo] = ym.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+
+  // ---------- Currency ----------
+  function toUSD(amount, currency, rate) { return currency === 'LBP' ? round2(Number(amount) / (Number(rate) || 89500)) : round2(amount); }
+
+  // ---------- Wallets ----------
+  function walletBalances(state) {
+    const w = {}; state.settings.wallets.forEach((x) => { w[x.id] = { id: x.id, name: x.name, balance: Number(x.opening) || 0, in: 0, out: 0 }; });
+    state.incomes.forEach((i) => { const x = w[i.walletId]; if (x) { x.balance += i.amount; x.in += i.amount; } });
+    state.transactions.forEach((t) => { const x = w[t.walletId]; if (x) { x.balance -= t.amount; x.out += t.amount; } });
+    state.walletTransfers.forEach((t) => { if (w[t.fromWalletId]) w[t.fromWalletId].balance -= t.amount; if (w[t.toWalletId]) w[t.toWalletId].balance += t.amount; });
+    return Object.values(w).map((x) => Object.assign(x, { balance: round2(x.balance), in: round2(x.in), out: round2(x.out) }));
+  }
+
+  // ---------- Reports ----------
+  /** Month-by-month totals. Returns [{month, income, out, byType:{spend,save,...}, net, cumulative}] */
+  function monthlySeries(state, months) {
+    const secType = {}; state.sections.forEach((s) => { secType[s.id] = s.type; });
+    const keys = new Set();
+    state.incomes.forEach((i) => keys.add(monthKey(i.date)));
+    state.transactions.forEach((t) => keys.add(monthKey(t.date)));
+    const now = monthKey(localToday());
+    keys.add(now);
+    let first = [...keys].sort()[0];
+    if (months) first = addMonths(now, -(months - 1));
+    const list = []; for (let m = first; m <= now; m = addMonths(m, 1)) list.push(m);
+    const map = {}; list.forEach((m) => { map[m] = { month: m, income: 0, out: 0, byType: {} }; });
+    let carry = 0;
+    // carry-in before first month
+    state.incomes.forEach((i) => { if (monthKey(i.date) < first) carry += i.amount; });
+    state.transactions.forEach((t) => { if (monthKey(t.date) < first) carry -= t.amount; });
+    state.incomes.forEach((i) => { const r = map[monthKey(i.date)]; if (r) r.income += i.amount; });
+    state.transactions.forEach((t) => {
+      const r = map[monthKey(t.date)]; if (!r) return;
+      r.out += t.amount; const ty = secType[t.sectionId] || 'other'; r.byType[ty] = (r.byType[ty] || 0) + t.amount;
+    });
+    return list.map((m) => { const r = map[m]; r.income = round2(r.income); r.out = round2(r.out); r.net = round2(r.income - r.out); carry += r.net; r.cumulative = round2(carry); return r; });
+  }
+
+  /** Spending per category in a date range [from, to] (inclusive YYYY-MM-DD). */
+  function spendingByCategory(state, from, to) {
+    const rows = {};
+    state.transactions.forEach((t) => {
+      if ((from && t.date < from) || (to && t.date > to)) return;
+      const { section, category } = findCategory(state, t.sectionId, t.categoryId);
+      const k = t.sectionId + '|' + t.categoryId;
+      if (!rows[k]) rows[k] = { name: category ? category.name : '(deleted)', section: section ? section.name : '?', color: section ? section.color : '#888', type: section ? section.type : 'other', amount: 0, count: 0 };
+      rows[k].amount += t.amount; rows[k].count++;
+    });
+    return Object.values(rows).map((r) => Object.assign(r, { amount: round2(r.amount) })).sort((a, b) => b.amount - a.amount);
+  }
+
+  /** Average monthly income over the last `n` months that had income (fallback: all). */
+  function avgMonthlyIncome(state, n) {
+    const by = {}; state.incomes.forEach((i) => { const k = monthKey(i.date); by[k] = (by[k] || 0) + i.amount; });
+    const keys = Object.keys(by).sort().slice(-(n || 3));
+    if (!keys.length) return 0;
+    return round2(sum(keys.map((k) => by[k])) / keys.length);
+  }
+
+  // ---------- Goals ----------
+  /** For each goal (non-debt category with a target): saved, monthly rate from the plan, months left, ETA. */
+  function goalTimelines(state, extras) {
+    const bal = balances(state);
+    const inc = avgMonthlyIncome(state, 3);
+    const out = [];
+    bal.sections.forEach((s) => {
+      if (s.type === 'debt') return;
+      s.categories.forEach((c) => {
+        if (!(c.target > 0)) return;
+        const planRate = round2(inc * (s.percent / 100) * (c.percent / 100));
+        const extra = Number(extras && extras[c.categoryId]) || 0;
+        const rate = planRate + extra;
+        const saved = Math.max(0, c.available);
+        const left = round2(Math.max(0, c.target - saved));
+        const months = left <= 0 ? 0 : rate > 0 ? Math.ceil(left / rate) : null;
+        const eta = months == null ? null : addMonths(monthKey(localToday()), months);
+        out.push({ sectionId: s.id, categoryId: c.categoryId, section: s.name, name: c.name, color: s.color, target: c.target, saved: round2(saved), left, planRate, extra, rate: round2(rate), months, eta, pct: Math.min(100, (saved / c.target) * 100) });
+      });
+    });
+    return out;
+  }
+
+  // ---------- Debt planner ----------
+  /** Simulate paying debts with `budget` per month. strategy: 'avalanche' (highest APR first) | 'snowball' (smallest balance first). */
+  function debtPlan(debts, budget, strategy) {
+    let list = debts.filter((d) => d.balance > 0).map((d) => ({ name: d.name, balance: Number(d.balance), apr: Number(d.apr) || 0, min: Number(d.minPayment) || 0, interest: 0, paidOffMonth: null }));
+    const minTotal = sum(list, (d) => Math.min(d.min, d.balance));
+    if (!list.length) return { ok: true, months: 0, totalInterest: 0, debts: [], minTotal: 0 };
+    if (budget <= 0) return { ok: false, reason: 'no-budget', minTotal, debts: list };
+    let month = 0, totalInterest = 0;
+    while (list.some((d) => d.balance > 0.005) && month < 600) {
+      month++;
+      list.forEach((d) => { if (d.balance > 0) { const i = d.balance * d.apr / 1200; d.balance += i; d.interest += i; totalInterest += i; } });
+      let money = budget;
+      list.forEach((d) => { if (d.balance > 0) { const p = Math.min(d.min, d.balance, money); d.balance -= p; money -= p; } });
+      const order = list.filter((d) => d.balance > 0.005).sort((a, b) => strategy === 'snowball' ? a.balance - b.balance : b.apr - a.apr || a.balance - b.balance);
+      for (const d of order) { if (money <= 0) break; const p = Math.min(d.balance, money); d.balance -= p; money -= p; }
+      list.forEach((d) => { if (d.balance <= 0.005 && d.paidOffMonth == null) { d.balance = 0; d.paidOffMonth = month; } });
+      if (month === 1 && budget < minTotal) { /* still simulate, but flag */ }
+    }
+    const ok = month < 600;
+    return { ok, reason: ok ? '' : 'never', months: month, totalInterest: round2(totalInterest), minTotal: round2(minTotal), underMin: budget < minTotal,
+      debts: list.map((d) => ({ name: d.name, apr: d.apr, interest: round2(d.interest), paidOffMonth: d.paidOffMonth })) };
+  }
+
+  /** Current debts from the plan (debt-type categories with a total). */
+  function currentDebts(state) {
+    const bal = balances(state);
+    const out = [];
+    bal.sections.forEach((s) => { if (s.type !== 'debt') return; s.categories.forEach((c) => {
+      const cat = s.categories && state.sections.find((x) => x.id === s.id).categories.find((x) => x.id === c.categoryId);
+      if (c.target > 0) out.push({ sectionId: s.id, categoryId: c.categoryId, name: c.name, balance: round2(Math.max(0, c.target - c.spent)), apr: cat.apr || 0, minPayment: cat.minPayment || 0 });
+    }); });
+    return out;
+  }
+
+  // ---------- Recurring ----------
+  /** Recurring items that are due this month and not yet logged. */
+  function dueRecurring(state, today) {
+    today = today || localToday();
+    const ym = monthKey(today), day = Number(today.slice(8, 10));
+    return state.recurring.filter((r) => r.lastLogged !== ym && day >= Math.min(Number(r.day) || 1, 28));
+  }
+  function upcomingRecurring(state, today, withinDays) {
+    today = today || localToday();
+    const ym = monthKey(today), day = Number(today.slice(8, 10));
+    return state.recurring.filter((r) => r.lastLogged !== ym && (Number(r.day) || 1) > day && (Number(r.day) || 1) - day <= (withinDays || 3));
+  }
+  function recurringTx(r, today) {
+    const ym = monthKey(today || localToday());
+    const dd = String(Math.min(Number(r.day) || 1, 28)).padStart(2, '0');
+    return { id: uid('tx'), createdAt: Date.now(), date: `${ym}-${dd}`, sectionId: r.sectionId, categoryId: r.categoryId, amount: round2(r.amount), walletId: r.walletId, method: '', note: r.name + ' (recurring)', recurringId: r.id };
+  }
+
+  // ---------- Export ----------
+  function toCSV(state) {
+    const q = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const wName = {}; state.settings.wallets.forEach((w) => { wName[w.id] = w.name; });
+    const rows = [['Date', 'Type', 'Section', 'Category', 'Wallet', 'Amount (' + state.settings.currency + ')', 'Original amount', 'Note']];
+    state.incomes.forEach((i) => rows.push([i.date, 'Income', '', i.source || '', wName[i.walletId] || '', i.amount, i.original ? i.original.amount + ' ' + i.original.currency : '', i.note || '']));
+    state.transactions.forEach((t) => { const { section, category } = findCategory(state, t.sectionId, t.categoryId);
+      rows.push([t.date, 'Payment', section ? section.name : '', category ? category.name : '', wName[t.walletId] || '', -t.amount, t.original ? t.original.amount + ' ' + t.original.currency : '', t.note || '']); });
+    state.transfers.forEach((t) => { const a = findCategory(state, t.from.sectionId, t.from.categoryId), b = findCategory(state, t.to.sectionId, t.to.categoryId);
+      rows.push([t.date, 'Bucket transfer', (a.section ? a.section.name : '') + ' → ' + (b.section ? b.section.name : ''), (a.category ? a.category.name : '') + ' → ' + (b.category ? b.category.name : ''), '', t.amount, '', t.note || '']); });
+    rows.splice(1, rows.length, ...rows.slice(1).sort((x, y) => String(x[0]).localeCompare(String(y[0]))));
+    return '﻿' + rows.map((r) => r.map(q).join(',')).join('\r\n');
+  }
+
   return {
+    monthKey, localToday, addMonths, monthLabel, toUSD, walletBalances, monthlySeries, spendingByCategory, avgMonthlyIncome,
+    goalTimelines, debtPlan, currentDebts, dueRecurring, upcomingRecurring, recurringTx, toCSV,
     SCHEMA_VERSION, SECTION_TYPES, PALETTE,
     uid, round2, sum, defaultState, migrate, validatePlan, distribute, splitIncome,
     findCategory, balances, money, paymentMessage, summaryForAI, fallbackAdvice
