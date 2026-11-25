@@ -1,7 +1,7 @@
 {
   "name": "leons-ledger",
   "productName": "Leon's Ledger",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Personal income splitter and budget tracker with an AI advisor",
   "main": "main.js",
   "author": "Leon Markarian",

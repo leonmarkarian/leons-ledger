@@ -13,6 +13,8 @@ for (const f of ['app.js', 'logic.js', 'styles.css']) fs.copyFileSync(path.join(
 for (const f of ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png']) {
   fs.copyFileSync(path.join(root, 'build', f), path.join(out, 'icons', f));
 }
+// iOS caches home-screen icons by file name, so publish a uniquely named copy each version
+fs.copyFileSync(path.join(root, 'build', 'apple-touch-icon.png'), path.join(out, `apple-touch-icon-${version}.png`));
 fs.writeFileSync(path.join(out, 'web-api.js'), fs.readFileSync(path.join(root, 'web', 'web-api.js'), 'utf8').replace(/__VERSION__/g, version));
 
 let html = fs.readFileSync(path.join(root, 'src', 'index.html'), 'utf8');
@@ -20,8 +22,8 @@ html = html
   .replace('<link rel="stylesheet" href="styles.css" />',
     `<link rel="stylesheet" href="styles.css?v=${version}" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" type="image/png" href="icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=${version}" />
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-${version}.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
@@ -41,9 +43,9 @@ fs.writeFileSync(path.join(out, 'manifest.webmanifest'), JSON.stringify({
   background_color: '#000000',
   theme_color: '#000000',
   icons: [
-    { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-    { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    { src: `icons/icon-192.png?v=${version}`, sizes: '192x192', type: 'image/png' },
+    { src: `icons/icon-512.png?v=${version}`, sizes: '512x512', type: 'image/png' },
+    { src: `icons/icon-maskable-512.png?v=${version}`, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
   ]
 }, null, 2));
 
