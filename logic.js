@@ -45,10 +45,7 @@
         aiEnabled: true,
         autoAdviceOnIncome: true,
         paymentMethods: ['Cash', 'Wish Money card'],
-        aboutMe:
-          'Goals: financial independence; wedding planned for mid-summer 2027; a car (a need, not optional); ' +
-          'a house (prefer to buy, else rent) and furniture; a 6-month emergency buffer. ' +
-          'Monthly living costs roughly $500–1,000. Planning to start a business and keep its money separate.'
+        aboutMe: ''
       },
       sections: [
         { id: uid('sec'), name: 'Allowance', type: 'spend', percent: 35, color: PALETTE[0], categories: [
@@ -81,6 +78,7 @@
     const s = Object.assign({}, base, state);
     s.settings = Object.assign({}, base.settings, state.settings || {});
     ['incomes', 'transactions', 'transfers', 'walletTransfers', 'recurring', 'monthlyReports', 'chat'].forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
+    if (!s.deleted || typeof s.deleted !== 'object') s.deleted = {};
     // wallets: older versions only had a list of payment-method names
     if (!Array.isArray(state.settings && state.settings.wallets) || !state.settings.wallets.length) {
       const names = (state.settings && state.settings.paymentMethods) || ['Cash', 'Wish Money card'];
@@ -422,7 +420,7 @@
   function recurringTx(r, today) {
     const ym = monthKey(today || localToday());
     const dd = String(Math.min(Number(r.day) || 1, 28)).padStart(2, '0');
-    return { id: uid('tx'), createdAt: Date.now(), date: `${ym}-${dd}`, sectionId: r.sectionId, categoryId: r.categoryId, amount: round2(r.amount), walletId: r.walletId, method: '', note: r.name + ' (recurring)', recurringId: r.id };
+    return { id: 'rctx_' + r.id + '_' + ym, createdAt: Date.now(), date: `${ym}-${dd}`, sectionId: r.sectionId, categoryId: r.categoryId, amount: round2(r.amount), walletId: r.walletId, method: '', note: r.name + ' (recurring)', recurringId: r.id };
   }
 
   // ---------- Export ----------
@@ -439,7 +437,61 @@
     return '﻿' + rows.map((r) => r.map(q).join(',')).join('\r\n');
   }
 
+
+  // ---------- Sync helpers ----------
+  const DEVICE_KEYS = ['apiKey', 'pinHash', 'theme'];
+  const LIST_KEYS = ['incomes', 'transactions', 'transfers', 'walletTransfers', 'recurring'];
+  const stamp = (x) => x.updatedAt || x.createdAt || 0;
+
+  /** Merge two copies of the same budget (e.g. this device and the server). Entries are combined by id,
+      deletions are kept as tombstones, the plan/settings come from whichever copy changed them last. */
+  function mergeStates(local, remote, opts) {
+    if (!remote || !remote.settings) return local;
+    if (!local || !local.settings) return migrate(remote);
+    const preferRemote = opts && opts.preferRemote;
+    const a = local, b = migrate(JSON.parse(JSON.stringify(remote)));
+    const out = Object.assign({}, a);
+    const deleted = Object.assign({}, b.deleted || {}, a.deleted || {});
+    out.deleted = deleted;
+    LIST_KEYS.forEach((k) => {
+      const map = new Map();
+      (b[k] || []).forEach((x) => map.set(x.id, x));
+      (a[k] || []).forEach((x) => {
+        const y = map.get(x.id);
+        if (!y) { map.set(x.id, x); return; }
+        let pick = stamp(x) > stamp(y) || (stamp(x) === stamp(y) && !preferRemote) ? x : y;
+        if (k === 'recurring') pick = Object.assign({}, pick, { lastLogged: [x.lastLogged || '', y.lastLogged || ''].sort().pop() });
+        map.set(x.id, pick);
+      });
+      out[k] = [...map.values()].filter((x) => !deleted[x.id]).sort((p, q) => String(p.date || '').localeCompare(String(q.date || '')) || (p.createdAt || 0) - (q.createdAt || 0) || String(p.id).localeCompare(String(q.id)));
+    });
+    const reps = new Map();
+    [...(b.monthlyReports || []), ...(a.monthlyReports || [])].forEach((r) => { const o = reps.get(r.month); if (!o || String(r.date) >= String(o.date)) reps.set(r.month, r); });
+    out.monthlyReports = [...reps.values()].sort((p, q) => p.month.localeCompare(q.month));
+    const pa = a.planUpdatedAt || 0, pb = b.planUpdatedAt || 0;
+    out.sections = pb > pa || (pb === pa && preferRemote) ? b.sections : a.sections;
+    out.planUpdatedAt = Math.max(pa, pb);
+    const sa = a.settingsUpdatedAt || 0, sb = b.settingsUpdatedAt || 0;
+    const baseSettings = sb > sa || (sb === sa && preferRemote) ? b.settings : a.settings;
+    out.settings = Object.assign({}, baseSettings);
+    DEVICE_KEYS.forEach((k) => { out.settings[k] = a.settings[k]; });
+    out.settingsUpdatedAt = Math.max(sa, sb);
+    out.chat = a.chat || [];
+    return out;
+  }
+
+  /** The copy of a budget that is uploaded: no device secrets, no private AI chat. */
+  function forUpload(state) {
+    const c = JSON.parse(JSON.stringify(state));
+    DEVICE_KEYS.forEach((k) => { delete c.settings[k]; });
+    c.chat = [];
+    return c;
+  }
+  const sameBudget = (x, y) => JSON.stringify(forUpload(x)) === JSON.stringify(forUpload(y));
+  const isEmptyBudget = (st) => !st || (!(st.incomes || []).length && !(st.transactions || []).length);
+
   return {
+    mergeStates, forUpload, sameBudget, isEmptyBudget, DEVICE_KEYS,
     monthKey, localToday, addMonths, monthLabel, toUSD, walletBalances, monthlySeries, spendingByCategory, avgMonthlyIncome,
     goalTimelines, debtPlan, currentDebts, dueRecurring, upcomingRecurring, recurringTx, toCSV,
     SCHEMA_VERSION, SECTION_TYPES, PALETTE,

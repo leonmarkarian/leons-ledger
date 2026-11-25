@@ -35,7 +35,98 @@
   const fmtDate = (d) => new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const sym = () => esc(state.settings.currencySymbol || '$');
 
-  async function persist() { await api.save(state); }
+  // Storage: one file holds every budget on this device (your own + shared ones).
+  let root = null;
+  let apiBase = null;
+  let syncState = { status: 'off', at: 0, msg: '' };
+  let syncTimer = null;
+  let remoteBooks = null;
+  const DISCOVERY = location.protocol === 'file:' ? 'https://leonmarkarian.github.io/leons-ledger/api.json' : './api.json';
+
+  function loadRoot(raw) {
+    if (raw && raw.books) root = raw;
+    else root = { v: 2, active: 'local', books: { local: raw }, meta: { local: { name: 'My budget' } }, account: null, device: {} };
+    root.meta = root.meta || {}; root.device = root.device || {};
+    if (!root.deviceId) root.deviceId = L.uid('dev');
+    Object.keys(root.books).forEach((k) => { root.books[k] = L.migrate(root.books[k]); root.meta[k] = root.meta[k] || { name: k === 'local' ? 'My budget' : 'Shared budget' }; });
+    // device-only settings (theme, PIN, own API key) live on the device, not in a budget
+    L.DEVICE_KEYS.forEach((k) => { if (root.device[k] == null) root.device[k] = root.books.local.settings[k]; });
+    if (!root.books[root.active]) root.active = 'local';
+    useBook(root.active);
+  }
+  function useBook(key) {
+    root.active = key; state = root.books[key];
+    L.DEVICE_KEYS.forEach((k) => { state.settings[k] = root.device[k]; });
+  }
+  async function persist(opts) {
+    L.DEVICE_KEYS.forEach((k) => { root.device[k] = state.settings[k]; });
+    await api.save(root);
+    if (!(opts && opts.noSync)) scheduleSync();
+  }
+  function markDeleted(id) { state.deleted = state.deleted || {}; state.deleted[id] = Date.now(); }
+
+  // ---------- server ----------
+  async function discover() {
+    try { const r = await fetch(DISCOVERY + '?t=' + Date.now(), { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.url) { apiBase = j.url.replace(/\/$/, ''); root.apiUrl = apiBase; } } }
+    catch (_) { apiBase = root.apiUrl || null; }
+    if (!apiBase) apiBase = root.apiUrl || null;
+  }
+  async function call(method, path, body) {
+    if (!apiBase) throw new Error('The online service isn’t available yet.');
+    const headers = { 'content-type': 'application/json', 'x-device-id': root.deviceId };
+    if (root.account && root.account.token) headers.authorization = 'Bearer ' + root.account.token;
+    let res;
+    try { res = await fetch(apiBase + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
+    catch (_) { throw Object.assign(new Error('No internet connection.'), { offline: true }); }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401 && root.account && path !== '/auth/login') { root.account = null; await api.save(root); }
+      throw Object.assign(new Error(j.error || 'HTTP ' + res.status), { status: res.status, data: j });
+    }
+    return j;
+  }
+
+  function scheduleSync(delay) { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncActive(), delay == null ? 2500 : delay); }
+  async function syncActive() {
+    const key = root.active, meta = root.meta[key];
+    if (!root.account || !meta || !meta.remoteId || !apiBase) { syncState.status = root.account ? 'local' : 'off'; drawSync(); return false; }
+    syncState.status = 'syncing'; drawSync();
+    try {
+      let changed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const remote = await call('GET', '/books/' + meta.remoteId);
+        const before = JSON.stringify(L.forUpload(root.books[key]));
+        const merged = L.mergeStates(root.books[key], remote.data);
+        root.books[key] = merged; if (root.active === key) useBook(key);
+        if (JSON.stringify(L.forUpload(merged)) !== before) changed = true;
+        meta.name = remote.name || meta.name;
+        if (JSON.stringify(L.forUpload(merged)) === JSON.stringify(L.forUpload(L.migrate(remote.data)))) { meta.rev = remote.rev; break; }
+        try { const r = await call('PUT', '/books/' + meta.remoteId, { baseRev: remote.rev, data: L.forUpload(merged) }); meta.rev = r.rev; break; }
+        catch (e) { if (e.status !== 409) throw e; }
+      }
+      await persist({ noSync: true });
+      syncState = { status: 'ok', at: Date.now(), msg: '' }; drawSync();
+      if (changed && !document.querySelector('main input:focus, main textarea:focus, main select:focus, .modal')) render();
+      return changed;
+    } catch (e) {
+      syncState = { status: e.offline ? 'offline' : 'error', at: Date.now(), msg: e.message }; drawSync();
+      return false;
+    }
+  }
+  function drawSync() {
+    const el = $('#syncPill'); if (!el) return;
+    const map = { off: '', local: '', syncing: '⟳ Syncing…', ok: '✓ Synced', offline: '○ Offline — will sync later', error: '⚠ ' + syncState.msg };
+    el.textContent = map[syncState.status] || ''; el.className = 'sync-pill ' + syncState.status;
+    const sw = $('#bookSwitch');
+    if (sw) {
+      const keys = Object.keys(root.books);
+      sw.classList.toggle('hidden', keys.length < 2);
+      sw.innerHTML = keys.map((k) => `<option value="${k}" ${k === root.active ? 'selected' : ''}>${esc(root.meta[k].name || 'Budget')}${root.meta[k].shared ? ' 👥' : ''}</option>`).join('');
+    }
+  }
+  async function switchBook(key) {
+    await persist({ noSync: true }); useBook(key); applyTheme(); draftPlan = null; render(); animateEntrance(); drawSync(); syncActive();
+  }
 
   function toast(text, isErr) {
     const t = document.createElement('div');
@@ -106,13 +197,21 @@
     ].join(' ');
   }
 
+  // Your own key if you set one, otherwise the built-in AI (server, daily limit)
+  async function aiRequest(system, messages) {
+    const s = state.settings;
+    if (s.apiKey) return api.askAI({ apiKey: s.apiKey, model: s.model, system, messages });
+    try { const r = await call('POST', '/ai', { system, messages }); return { ok: true, text: r.text }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  }
+
   async function askAdvisor(messages, focusIncome) {
     const s = state.settings;
-    if (!s.aiEnabled || !s.apiKey) return { ok: false, offline: true, text: L.fallbackAdvice(state, focusIncome) };
+    if (!s.aiEnabled || (!s.apiKey && !apiBase)) return { ok: false, offline: true, text: L.fallbackAdvice(state, focusIncome) };
     const context = L.summaryForAI(state, focusIncome);
     const msgs = messages.map((x) => ({ role: x.role, content: x.content }));
     msgs[0] = { role: msgs[0].role, content: `Here is my current financial picture:\n\n${context}\n\n---\n\n${msgs[0].content}` };
-    const res = await api.askAI({ apiKey: s.apiKey, model: s.model, system: systemPrompt(), messages: msgs });
+    const res = await aiRequest(systemPrompt(), msgs);
     if (!res.ok) return { ok: false, error: res.error, text: L.fallbackAdvice(state, focusIncome) + `\n\n⚠ AI unavailable: ${res.error}` };
     return { ok: true, text: res.text };
   }
@@ -147,15 +246,14 @@
 
   async function scanReceipt(file) {
     const st = state.settings;
-    if (!st.aiEnabled || !st.apiKey) return toast('Receipt scanning uses the AI — add your API key in Settings first.', true);
+    if (!st.aiEnabled || (!st.apiKey && !apiBase)) return toast('Receipt scanning needs the AI — turn it on in Settings (and be online).', true);
     scanBusy = true; render();
     try {
       const data = await imageToJpegBase64(file, 1280);
       const cats = state.sections.flatMap((s) => s.categories.map((c) => `${s.name} → ${c.name}`));
       const prompt = `Read this receipt, invoice or payment screenshot. Reply with ONLY a JSON object, no other text:
 {"amount": number (the total paid), "currency": "USD" or "LBP", "date": "YYYY-MM-DD" or null, "merchant": short name, "category": the best match from this list or null: ${JSON.stringify(cats)}}`;
-      const res = await api.askAI({ apiKey: st.apiKey, model: st.model, system: 'You extract payment details from images. Output strict JSON only.',
-        messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }, { type: 'text', text: prompt }] }] });
+      const res = await aiRequest('You extract payment details from images. Output strict JSON only.', [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }, { type: 'text', text: prompt }] }]);
       if (!res.ok) throw new Error(res.error);
       const json = JSON.parse((res.text.match(/\{[\s\S]*\}/) || ['{}'])[0]);
       scanBusy = false; render();
@@ -223,7 +321,8 @@
       const due = L.dueRecurring(state).filter((r) => !r.auto);
       const soon = L.upcomingRecurring(state, null, 3);
       return `
-        <div class="row between"><div><h1>Dashboard</h1><p class="sub">Where your money is right now.</p></div>
+        ${Object.keys(root.books).length > 1 ? `<div class="mobile-book"><select id="bookSwitch2">${Object.keys(root.books).map((k) => `<option value="${k}" ${k === root.active ? 'selected' : ''}>${esc(root.meta[k].name || 'Budget')}${root.meta[k].shared ? ' 👥' : ''}</option>`).join('')}</select></div>` : ''}
+        <div class="row between"><div><h1>Dashboard${root.meta[root.active].shared ? ` <span class="tag">👥 ${esc(root.meta[root.active].name)}</span>` : ''}</h1><p class="sub">Where your money is right now.${syncState.status === 'ok' ? ' <span class="good small">✓ Synced</span>' : syncState.status === 'offline' ? ' <span class="muted small">○ Offline</span>' : ''}</p></div>
           <div class="row"><button class="btn" data-go="spend">− Spend / Pay</button><button class="btn primary" data-go="income">＋ Log income</button></div></div>
         <div class="grid g3">
           <div class="card stat"><div class="label">Available${bizSecs.length ? ' (personal)' : ' across all buckets'}</div><div class="value ${personalAvail < 0 ? 'bad' : ''}" data-count="${personalAvail}">${m(personalAvail)}</div>${bizSecs.length ? `<div class="muted small mt-s">Business kept separate: <b>${m(bizAvail)}</b></div>` : ''}</div>
@@ -398,9 +497,9 @@
 
     advisor() {
       const s = state.settings;
-      const noKey = !s.apiKey || !s.aiEnabled;
+      const noKey = !s.aiEnabled || (!s.apiKey && !apiBase);
       return `<h1>AI advisor</h1><p class="sub">Ask anything about your money. The advisor sees your plan, balances, debts, goals and recent activity.</p>
-        ${noKey ? `<div class="card mt" style="border-color:rgba(242,180,91,.4)"><b class="warn">AI is off.</b> <span class="muted">Add your Anthropic API key in Settings to get personalised advice. Until then you'll get offline tips.</span> <button class="btn sm" data-go="settings">Open Settings</button></div>` : ''}
+        ${noKey ? `<div class="card mt" style="border-color:rgba(242,180,91,.4)"><b class="warn">AI is off.</b> <span class="muted">${s.aiEnabled ? 'Connect to the internet to use the AI advisor.' : 'Turn on the AI advisor in Settings.'} Until then you'll get offline tips.</span> <button class="btn sm" data-go="settings">Open Settings</button></div>` : ''}
         <div class="card mt"><div class="chat" id="chat">
           ${state.chat.length ? state.chat.map((c) => `<div class="msg ${c.role}">${esc(c.content)}</div>`).join('') : `<div class="empty">Try: “How long until I can pay off my debts?” · “Should I move more to my wedding fund?” · “Review my spending this month.”</div>`}
           ${aiBusy ? '<div class="msg assistant typing">Thinking…</div>' : ''}
@@ -411,13 +510,37 @@
 
     settings() {
       const s = state.settings;
-      return `<h1>Settings</h1><p class="sub">Everything is stored only on this device.</p>
-        <div class="grid g2">
+      const acc = root.account, meta = root.meta[root.active];
+      const shared = Object.keys(root.books).filter((k) => k !== 'local');
+      return `<h1>Settings</h1><p class="sub">${acc ? 'Saved on this device and synced to your account.' : 'Everything is stored only on this device.'}</p>
+        <div class="card account-card"><div class="row between wrap"><h2 style="margin:0">Account & sync</h2>${acc ? `<span class="muted small">Signed in as <b>${esc(acc.username)}</b> · <a href="#" id="accOut">Log out</a></span>` : ''}</div>
+          ${!apiBase ? '<p class="muted small">The online service isn’t reachable right now. Check your internet connection.</p>' : !acc ? `
+            <p class="muted small">Create a free account to sync this budget between your phone and computer, share a budget with someone, and get more daily AI requests.</p>
+            <div class="form-grid acc-form"><label class="f">Username<input id="accUser" autocomplete="username" placeholder="e.g. leon"></label><label class="f">Password<input id="accPass" type="password" autocomplete="current-password" placeholder="8+ characters"></label></div>
+            <div class="row mt-s"><button class="btn primary" id="accLogin">Log in</button><button class="btn" id="accSignup">Create account</button></div>
+            <p class="muted small">Your budget is stored on the server so your devices can sync. Your PIN and any personal API key never leave this device.</p>` : `
+            <div class="grid g2 mt-s">
+              <div><b>This budget: ${esc(meta.name || 'My budget')}</b>
+                <p class="muted small" style="margin:4px 0 10px">${meta.remoteId ? (meta.shared ? 'Shared — everyone in it sees the same buckets and entries.' : 'Syncing between your devices.') : 'Only on this device.'}</p>
+                ${!meta.remoteId ? '<button class="btn primary" id="syncOn">Turn on sync</button>' : `<button class="btn" id="syncNow">Sync now</button> ${meta.shared || root.active !== 'local' ? '<button class="btn" id="bookInvite">Invite someone</button>' : ''}`}
+                ${root.active !== 'local' ? '<button class="btn ghost danger" id="bookLeave">Leave this budget</button>' : ''}
+              </div>
+              <div><b>Shared budgets</b>
+                <p class="muted small" style="margin:4px 0 10px">Plan money together, e.g. a wedding or household budget. Each person logs their own spending; everyone sees the totals.</p>
+                <div class="row wrap"><button class="btn" id="bookNew">＋ New shared budget</button><input id="joinCode" placeholder="Invite code" style="width:130px;text-transform:uppercase"><button class="btn" id="bookJoin">Join</button></div>
+                ${remoteBooks ? remoteBooks.filter((b) => !Object.values(root.meta).some((mm) => mm.remoteId === b.id)).map((b) => `<div class="row between mt-s small"><span>${esc(b.name)} <span class="muted">${b.shared ? b.members + ' people' : 'your budget'}</span></span><button class="btn sm" data-getbook="${b.id}">Use on this device</button></div>`).join('') : ''}
+              </div>
+            </div>
+            ${Object.keys(root.books).length > 1 ? `<div class="mt-s small muted">Switch between budgets from the menu at the top of the sidebar.</div>` : ''}`}
+        </div>
+        <div class="grid g2 mt">
           <div class="card"><h2>AI advisor</h2>
             <label class="row small"><input type="checkbox" id="sAi" ${s.aiEnabled ? 'checked' : ''}> Enable AI advisor</label>
             <label class="row small mt-s"><input type="checkbox" id="sAuto" ${s.autoAdviceOnIncome ? 'checked' : ''}> Give advice automatically every time I log income</label>
-            <label class="f mt">Anthropic API key<input id="sKey" type="password" value="${esc(s.apiKey)}" placeholder="sk-ant-…"></label>
-            <div class="small muted mt-s">Get one at console.anthropic.com → API Keys. It's stored locally and only sent to Anthropic.</div>
+            <p class="small muted">The AI is built in — no key needed (${root.account ? '30' : '10'} requests a day${root.account ? '' : '; 30 with a free account'}).</p>
+            <details><summary class="small">Advanced: use my own Anthropic API key</summary>
+            <label class="f mt">Anthropic API key (optional)<input id="sKey" type="password" value="${esc(s.apiKey)}" placeholder="Leave empty to use the built-in AI"></label>
+            <div class="small muted mt-s">With your own key there's no daily limit; you pay Anthropic directly. It stays on this device.</div></details>
             <label class="f mt">Model<input id="sModel" value="${esc(s.model)}"></label>
             <label class="f mt">About me (the advisor uses this for context)<textarea id="sAbout" rows="5">${esc(s.aboutMe)}</textarea></label>
           </div>
@@ -649,6 +772,7 @@
   }
 
   function bindDashboard() {
+    if ($('#bookSwitch2')) $('#bookSwitch2').onchange = (e) => switchBook(e.target.value);
     $$('[data-paydue]').forEach((b) => (b.onclick = async () => {
       const r = state.recurring.find((x) => x.id === b.dataset.paydue); if (!r) return;
       const tx = L.recurringTx(r, today()); state.transactions.push(tx); r.lastLogged = L.monthKey(today());
@@ -736,7 +860,7 @@
       };
       $$('[data-delrc]').forEach((b) => (b.onclick = async () => {
         if (!(await confirmBox('Delete recurring bill?', 'Past payments stay in History.', 'Delete'))) return;
-        state.recurring = state.recurring.filter((r) => r.id !== b.dataset.delrc); await persist(); render();
+        markDeleted(b.dataset.delrc); state.recurring = state.recurring.filter((r) => r.id !== b.dataset.delrc); await persist(); render();
       }));
     } else {
       $('#trSave').onclick = async () => {
@@ -790,6 +914,7 @@
     $('#planSave').onclick = async () => {
       draftPlan.forEach((s) => { s.name = s.name.trim() || 'Untitled'; s.categories.forEach((c) => (c.name = c.name.trim() || 'Untitled')); });
       state.sections = JSON.parse(JSON.stringify(draftPlan));
+      state.planUpdatedAt = Date.now();
       await persist(); toast('Plan saved. New incomes will use it.'); draftPlan = null; rerender();
     };
   }
@@ -806,7 +931,7 @@
       const [kind, id] = b.dataset.del.split('|');
       const msg = kind === 'income' ? 'Deleting an income also removes the money it added to every bucket.' : 'This entry will be removed and the bucket balance restored.';
       if (!(await confirmBox('Delete entry?', msg, 'Delete'))) return;
-      state[listOf[kind]] = state[listOf[kind]].filter((x) => x.id !== id);
+      markDeleted(id); state[listOf[kind]] = state[listOf[kind]].filter((x) => x.id !== id);
       await persist(); render();
     }));
     $$('[data-edit]').forEach((b) => (b.onclick = () => {
@@ -833,6 +958,7 @@
             item.allocations.forEach((a, i) => (a.amount = parts[i]));
           }
           if (amount !== item.amount) item.original = null;
+          item.updatedAt = Date.now();
           item.amount = amount; item.date = $('#eDate', el).value || item.date; item.note = $('#eNote', el).value.trim();
           if (kind === 'spend') { const [s, c] = $('#eCat', el).value.split('|'); item.sectionId = s; item.categoryId = c; item.walletId = $('#eWallet', el).value; item.method = walletName(item.walletId); }
           if (kind === 'income') { item.source = $('#eSource', el).value.trim(); item.walletId = $('#eWallet', el).value; }
@@ -865,31 +991,41 @@
     $('#sSave').onclick = async () => {
       const s = state.settings;
       s.aiEnabled = $('#sAi').checked; s.autoAdviceOnIncome = $('#sAuto').checked;
-      s.apiKey = $('#sKey').value.trim(); s.model = $('#sModel').value.trim() || 'claude-sonnet-5-5';
+      s.apiKey = $('#sKey').value.trim(); s.model = $('#sModel').value.trim() || 'claude-haiku-5-5';
       s.aboutMe = $('#sAbout').value.trim(); s.currency = $('#sCur').value.trim() || 'USD'; s.currencySymbol = $('#sSym').value || '$';
       s.userName = $('#sName').value.trim(); s.lbpRate = Math.max(1, Number($('#sRate').value) || 89500);
       if ($('#sModel').value.trim() !== 'claude-haiku-5-5') s.modelChosen = true;
+      state.settingsUpdatedAt = Date.now();
       await persist(); toast('Settings saved.');
     };
     $('#bExport').onclick = async () => { const p = await api.exportData(state); if (p) toast('Backup saved to ' + p); };
     $('#bImport').onclick = async () => {
       const data = await api.importData(); if (!data) return;
       if (!(await confirmBox('Import backup?', 'This replaces all current data with the backup. Your API key is kept.', 'Import'))) return;
-      const key = state.settings.apiKey; state = L.migrate(data); state.settings.apiKey = state.settings.apiKey || key;
+      const keep = Object.assign({}, state.settings); const old = state;
+      state = L.migrate(data); L.DEVICE_KEYS.forEach((k) => { state.settings[k] = keep[k]; });
+      state.deleted = Object.assign({}, old.deleted || {});
+      [...old.incomes, ...old.transactions, ...old.transfers, ...old.walletTransfers, ...old.recurring].forEach((x) => { if (![...state.incomes, ...state.transactions, ...state.transfers, ...state.walletTransfers, ...state.recurring].some((y) => y.id === x.id)) state.deleted[x.id] = Date.now(); });
+      state.planUpdatedAt = state.settingsUpdatedAt = Date.now(); root.books[root.active] = state;
       await persist(); toast('Backup imported.'); render();
     };
     if (api.platform === 'web') $('#bFolder').classList.add('hidden');
     $('#bFolder').onclick = () => api.openDataFolder();
     $('#bReset').onclick = async () => {
       if (!(await confirmBox('Reset everything?', 'This deletes all incomes, payments and your plan, and restores the default setup. Export a backup first if you might want it back. This cannot be undone.', 'Reset'))) return;
-      const key = state.settings.apiKey; state = L.defaultState(); state.settings.apiKey = key;
+      const keep = Object.assign({}, state.settings); const old = state;
+      state = L.defaultState(); L.DEVICE_KEYS.forEach((k) => { state.settings[k] = keep[k]; });
+      state.deleted = Object.assign({}, old.deleted || {});
+      [...old.incomes, ...old.transactions, ...old.transfers, ...old.walletTransfers, ...old.recurring].forEach((x) => { state.deleted[x.id] = Date.now(); });
+      state.planUpdatedAt = state.settingsUpdatedAt = Date.now(); root.books[root.active] = state;
       await persist(); toast('Reset done.'); render();
     };
     $('#uCheck').onclick = () => { manualUpdateCheck = true; api.checkUpdates(); };
+    bindAccount();
     $$('[data-theme-pick]').forEach((b) => (b.onclick = async () => { state.settings.theme = b.dataset.themePick; applyTheme(); await persist(); render(); }));
     const readWallets = () => state.settings.wallets.map((w, i) => Object.assign({}, w, { name: ($(`[data-wname="${i}"]`).value || '').trim() || w.name, opening: Number($(`[data-wopen="${i}"]`).value) || 0 }));
     $('#wAdd').onclick = () => { state.settings.wallets = readWallets(); state.settings.wallets.push({ id: L.uid('w'), name: 'New wallet', opening: 0 }); render(); };
-    $('#wSave').onclick = async () => { state.settings.wallets = readWallets(); await persist(); toast('Wallets saved.'); render(); };
+    $('#wSave').onclick = async () => { state.settings.wallets = readWallets(); state.settingsUpdatedAt = Date.now(); await persist(); toast('Wallets saved.'); render(); };
     $$('[data-wdel]').forEach((b) => (b.onclick = async () => {
       const i = +b.dataset.wdel, w = state.settings.wallets[i];
       if (state.settings.wallets.length === 1) return toast('You need at least one wallet.', true);
@@ -927,6 +1063,103 @@
     if (manualUpdateCheck && ['none', 'error', 'dev'].includes(u.status)) { toast(text, u.status === 'error'); manualUpdateCheck = false; }
     if (u.status === 'none') setTimeout(() => pill.classList.add('hidden'), 10);
   });
+
+  // ---------------- Account, sync & shared budgets ----------------
+  async function refreshRemoteBooks() {
+    try { const r = await call('GET', '/me'); remoteBooks = r.books; } catch (_) { remoteBooks = null; }
+  }
+  async function linkRemote(bookInfo, opts) {
+    // bring a server budget onto this device
+    const remote = await call('GET', '/books/' + bookInfo.id);
+    const ownPersonal = !remote.shared && !(opts && opts.asNew);
+    const key = ownPersonal ? 'local' : bookInfo.id;
+    const localCopy = root.books[key];
+    root.books[key] = ownPersonal && localCopy && !L.isEmptyBudget(localCopy) ? L.mergeStates(localCopy, remote.data, { preferRemote: true }) : L.migrate(remote.data);
+    root.meta[key] = { name: remote.name, remoteId: remote.id, rev: remote.rev, shared: !!remote.shared };
+    await switchBook(key);
+  }
+  function bindAccount() {
+    const busy = (b, on) => { if (b) { b.disabled = on; } };
+    const doAuth = async (path, btn) => {
+      const username = $('#accUser').value.trim(), password = $('#accPass').value;
+      busy(btn, true);
+      try {
+        const r = await call('POST', path, { username, password });
+        root.account = { token: r.token, username: r.user.username, id: r.user.id };
+        await api.save(root);
+        await refreshRemoteBooks();
+        // a personal budget already on the server (logging in on a second device)?
+        const mine = (remoteBooks || []).find((b) => !b.shared && b.role === 'owner');
+        if (mine && !root.meta.local.remoteId) {
+          if (await confirmBox('Use your synced budget?', L.isEmptyBudget(root.books.local) ? 'Your budget from your other device will be downloaded here.' : 'Your budget from your other device will be combined with what is on this device.', 'Yes, sync it')) await linkRemote(mine);
+        }
+        toast(path === '/auth/signup' ? 'Account created — welcome!' : 'Logged in.');
+        render();
+      } catch (e) { toast(e.message, true); busy(btn, false); }
+    };
+    if ($('#accLogin')) $('#accLogin').onclick = (e) => doAuth('/auth/login', e.currentTarget);
+    if ($('#accSignup')) $('#accSignup').onclick = (e) => doAuth('/auth/signup', e.currentTarget);
+    if ($('#accOut')) $('#accOut').onclick = async (e) => {
+      e.preventDefault();
+      if (!(await confirmBox('Log out?', 'Your budgets stay on this device. Shared budgets will stop syncing until you log in again.', 'Log out'))) return;
+      try { await call('POST', '/auth/logout'); } catch (_) {}
+      root.account = null; remoteBooks = null; await api.save(root); syncState.status = 'off'; drawSync(); render();
+    };
+    if ($('#syncOn')) $('#syncOn').onclick = async (e) => {
+      busy(e.currentTarget, true);
+      try {
+        const meta = root.meta[root.active];
+        const r = await call('POST', '/books', { name: meta.name || 'My budget', shared: false, data: L.forUpload(state) });
+        Object.assign(meta, { remoteId: r.id, rev: r.rev });
+        await persist({ noSync: true }); toast('Sync is on. Log in on your other devices with the same account.'); syncActive(); render();
+      } catch (err2) { toast(err2.message, true); busy(e.currentTarget, false); }
+    };
+    if ($('#syncNow')) $('#syncNow').onclick = async () => { await syncActive(); toast(syncState.status === 'ok' ? 'All synced.' : syncState.msg || 'Could not sync right now.', syncState.status !== 'ok'); };
+    if ($('#bookInvite')) $('#bookInvite').onclick = async () => {
+      try {
+        const meta = root.meta[root.active];
+        const r = await call('POST', '/books/' + meta.remoteId + '/invite');
+        meta.shared = true; await persist({ noSync: true }); drawSync();
+        modal(`<h2>Invite to “${esc(meta.name)}”</h2><p class="muted">Ask them to open Leon's Ledger → Settings → Account & sync, create an account, and enter this code under <b>Shared budgets</b>:</p>
+          <div class="invite-code">${r.code}</div><p class="muted small">The code works for 7 days.</p><div class="row" style="justify-content:flex-end"><button class="btn primary" data-x>Done</button></div>`, (el, close) => { $('[data-x]', el).onclick = close; });
+      } catch (e) { toast(e.message, true); }
+    };
+    if ($('#bookNew')) $('#bookNew').onclick = () => {
+      modal(`<h2>New shared budget</h2><label class="f">Name<input id="nbName" placeholder="e.g. Wedding, Home"></label>
+        <p class="muted small">It starts with the default split plan — adjust it in Split plan. Then invite the other person.</p>
+        <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>Create</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('[data-ok]', el).onclick = async () => {
+          const name = $('#nbName', el).value.trim() || 'Shared budget';
+          try {
+            const fresh = L.defaultState(); fresh.settings.wallets = JSON.parse(JSON.stringify(state.settings.wallets)).map((w) => Object.assign(w, { opening: 0 }));
+            fresh.settings.currency = state.settings.currency; fresh.settings.currencySymbol = state.settings.currencySymbol; fresh.settings.lbpRate = state.settings.lbpRate;
+            fresh.planUpdatedAt = fresh.settingsUpdatedAt = Date.now();
+            const r = await call('POST', '/books', { name, shared: true, data: L.forUpload(fresh) });
+            root.books[r.id] = fresh; root.meta[r.id] = { name, remoteId: r.id, rev: r.rev, shared: true };
+            close(); await switchBook(r.id); go('settings'); toast(`“${name}” created. Tap “Invite someone” to share it.`);
+          } catch (e) { toast(e.message, true); }
+        };
+      });
+    };
+    if ($('#bookJoin')) $('#bookJoin').onclick = async () => {
+      const code = $('#joinCode').value.trim().toUpperCase(); if (!code) return;
+      try { const b = await call('POST', '/join', { code }); await linkRemote(b, { asNew: true }); toast(`You joined “${b.name}”.`); go('dashboard'); }
+      catch (e) { toast(e.message, true); }
+    };
+    if ($('#bookLeave')) $('#bookLeave').onclick = async () => {
+      const key = root.active, meta = root.meta[key];
+      if (!(await confirmBox('Leave this budget?', `“${meta.name}” will be removed from this device and you'll stop seeing it. Others keep it.`, 'Leave'))) return;
+      try { await call('POST', '/books/' + meta.remoteId + '/leave'); } catch (_) {}
+      delete root.books[key]; delete root.meta[key]; await switchBook('local'); go('dashboard');
+    };
+    $$('[data-getbook]').forEach((b) => (b.onclick = async () => {
+      const info = remoteBooks.find((x) => x.id === b.dataset.getbook);
+      try { await linkRemote(info, { asNew: !!info.shared || !!root.meta.local.remoteId }); toast(`“${info.name}” is now on this device.`); }
+      catch (e) { toast(e.message, true); }
+    }));
+    if (root.account && remoteBooks == null) refreshRemoteBooks().then(() => { if (page === 'settings' && remoteBooks && remoteBooks.length) render(); });
+  }
 
   function bindGoals() {
     $$('[data-extra]').forEach((el) => (el.oninput = () => {
@@ -1050,7 +1283,7 @@
   // ---------------- Boot ----------------
   $$('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.page)));
   (async () => {
-    state = L.migrate(await api.load());
+    loadRoot(await api.load());
     applyTheme();
     if (state.settings.pinHash) await lockScreen();
     await processRecurring();
@@ -1060,5 +1293,12 @@
     render();
     animateEntrance();
     setInterval(async () => { if (await processRecurring()) render(); }, 30 * 60 * 1000);
+    $('#bookSwitch').onchange = (e) => switchBook(e.target.value);
+    await discover(); drawSync();
+    if (page === 'settings') render();
+    syncActive();
+    setInterval(() => syncActive(), 60 * 1000);
+    window.addEventListener('focus', () => syncActive());
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) syncActive(); });
   })();
 })();
