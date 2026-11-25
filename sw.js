@@ -1,7 +1,7 @@
 /* Leon's Ledger service worker.
    Network-first: when online you always get the newest version; offline you get the last one. */
-const CACHE = 'leons-ledger-1.0.8';
-const FILES = ["./","./index.html","./styles.css?v=1.0.8","./web-api.js?v=1.0.8","./logic.js?v=1.0.8","./app.js?v=1.0.8","./manifest.webmanifest","./icons/icon-192.png","./icons/icon-512.png"];
+const CACHE = 'leons-ledger-1.0.9';
+const FILES = ["./","./index.html","./styles.css?v=1.0.9","./web-api.js?v=1.0.9","./logic.js?v=1.0.9","./app.js?v=1.0.9","./manifest.webmanifest","./icons/icon-192.png","./icons/icon-512.png"];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

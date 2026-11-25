@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   const KEY = 'leons-ledger-data';
-  const VERSION = '1.0.8';
+  const VERSION = '1.0.9';
   let updateCb = () => {};
 
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
