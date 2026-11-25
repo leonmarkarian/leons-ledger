@@ -31,8 +31,8 @@ One-time setup:
 To ship an update:
 1. Change the code. (Or ask Claude to change it.)
 2. Raise `"version"` in `package.json`, e.g. `1.0.0` → `1.0.1`.
-3. Commit, then run `git tag v1.0.1 && git push --tags`.
-4. GitHub Actions builds the installer and publishes the release. Installed copies pick it up on their next launch.
+3. Commit and push to `main`.
+4. GitHub Actions notices the new version number, builds the installer and publishes the release. Installed copies pick it up on their next launch. Pushes that don't change the version don't create a release.
 
 Without GitHub: build or receive a newer installer and run it over the current install. Your data stays.
 
