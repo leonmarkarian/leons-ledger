@@ -1,5 +1,6 @@
-# Publishes the phone version (web app) to GitHub Pages on every push to main.
-name: Phone app
+# Publishes the phone version (GitHub Pages) and deploys the online service (Cloudflare Worker)
+# on every push to main. The server step runs only once the Cloudflare secrets are added to the repo.
+name: Phone app & server
 on:
   push:
     branches: [main]
@@ -9,6 +10,8 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,6 +19,30 @@ jobs:
           node-version: 22
       - run: node test/logic.test.js
       - run: node scripts/build-web.js
+
+      - name: Deploy server to Cloudflare
+        if: env.CF_TOKEN != ''
+        continue-on-error: true
+        working-directory: server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          npm ci
+          find_db() { npx wrangler d1 list --json 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const a=JSON.parse(s);const d=a.find(x=>x.name==='leons-ledger-db');process.stdout.write(d?(d.uuid||d.id||''):'')}catch(e){}})"; }
+          DB_ID=$(find_db)
+          if [ -z "$DB_ID" ]; then npx wrangler d1 create leons-ledger-db; DB_ID=$(find_db); fi
+          echo "Database: $DB_ID"
+          sed -i "s/__D1_ID__/$DB_ID/" wrangler.toml
+          npx wrangler d1 execute leons-ledger-db --remote --file=schema.sql --yes
+          npx wrangler deploy 2>&1 | tee deploy.log
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          if [ -n "$ANTHROPIC_API_KEY" ]; then printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY; fi
+          echo "Server: $URL"
+          if [ -n "$URL" ]; then printf '{"url":"%s"}' "$URL" > ../dist-web/api.json; fi
+
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

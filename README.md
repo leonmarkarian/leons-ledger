@@ -25,6 +25,13 @@ Without a key, the app gives offline rule-based tips instead.
 - **Export**: a designed PDF report, plus CSV that opens in Excel
 - **Themes** (Black, Navy, Pink, Light), **PIN lock**, and a separate business budget
 
+## Online features (accounts, sync, shared budgets, built-in AI)
+These run on a small Cloudflare Worker in `server/`, which GitHub Actions deploys on every push. It needs these repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `ANTHROPIC_API_KEY`.
+- **Sync:** go to Settings → Account & sync, create an account and turn on sync, then log in on your other devices.
+- **Shared budgets:** create one and tap "Invite someone". The other person enters the 6-letter code.
+- **Built-in AI:** uses Claude Haiku on the owner's key. Limits are 10 requests a day per device, or 30 with an account. Change them in `server/wrangler.toml`.
+- Your PIN and any personal API key never leave the device. Budgets are stored on the server so they can sync.
+
 ## How it works
 - **Split plan**: each section gets a % of every income, and each category gets a % of its section. Both levels must add up to 100%. You can add, rename, recolor and delete sections and categories. Set a section's type to Spending, Savings, Debt, Investment or Other. For debts, enter the **total owed**. For savings, enter a **goal**.
 - **Log income**: enter the amount and see the split preview. You can tick the box to use different percentages for this one payment only.

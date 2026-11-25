@@ -1,0 +1,15 @@
+name = "leons-ledger-api"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+AI_MODEL = "claude-haiku-5-5"
+LIMIT_USER_PER_DAY = "30"
+LIMIT_DEVICE_PER_DAY = "10"
+LIMIT_IP_PER_DAY = "40"
+LIMIT_GLOBAL_PER_DAY = "3000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "leons-ledger-db"
+database_id = "__D1_ID__"

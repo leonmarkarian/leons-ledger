@@ -103,3 +103,28 @@ console.log('All logic tests passed.');
   assert.ok(csv.includes('Payment') && csv.includes('Income') && csv.split('\r\n').length === 3);
   console.log('v1.1 feature tests passed.');
 }
+
+// ---------- sync merge ----------
+{
+  const base = L.defaultState(); base.settings.apiKey = 'local-key';
+  const A = JSON.parse(JSON.stringify(base)), B = L.forUpload(JSON.parse(JSON.stringify(base)));
+  A.transactions.push({ id: 'a1', createdAt: 1, date: '2026-11-01', amount: 5 });
+  B.transactions.push({ id: 'b1', createdAt: 2, date: '2026-11-02', amount: 7 });
+  A.transactions.push({ id: 'x', createdAt: 1, date: '2026-11-03', amount: 1 });
+  B.transactions.push({ id: 'x', createdAt: 1, updatedAt: 9, date: '2026-11-03', amount: 2 }); // edited remotely
+  B.incomes.push({ id: 'gone', createdAt: 1, date: '2026-11-01', amount: 100, allocations: [] }); A.deleted = { gone: 5 }; // deleted locally
+  B.sections[0].name = 'Fun money'; B.planUpdatedAt = 50;
+  const M = L.mergeStates(A, B);
+  assert.deepStrictEqual(M.transactions.map((t) => t.id), ['a1', 'b1', 'x']);
+  assert.strictEqual(M.transactions[2].amount, 2, 'newer edit wins');
+  assert.strictEqual(M.incomes.length, 0, 'tombstone removes');
+  assert.strictEqual(M.sections[0].name, 'Fun money', 'newer plan wins');
+  assert.strictEqual(M.settings.apiKey, 'local-key', 'device key kept');
+  assert.ok(!('apiKey' in L.forUpload(M).settings), 'key never uploaded');
+  assert.ok(L.sameBudget(L.mergeStates(M, L.forUpload(M)), M));
+  // recurring: same bill logged on two devices -> one transaction
+  const r = { id: 'r9', name: 'Rent', amount: 10, day: 1 };
+  const t1 = L.recurringTx(r, '2026-12-03'), t2 = L.recurringTx(r, '2026-12-05');
+  assert.strictEqual(t1.id, t2.id);
+  console.log('sync merge tests passed.');
+}

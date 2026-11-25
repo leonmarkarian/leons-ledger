@@ -394,3 +394,19 @@ select { max-width: 100%; }
   .amount-row .cur-select { width: 80px; }
   .card { max-width: 100%; }
 }
+
+/* Accounts & sync (v1.2) */
+.book-switch { width: 100%; font-weight: 600; }
+.sync-pill { font-size: 11px; color: var(--muted); padding: 0 8px; min-height: 14px; }
+.sync-pill.ok { color: var(--good); } .sync-pill.error { color: var(--bad); } .sync-pill.syncing { animation: pulse 1.4s ease-in-out infinite; }
+.account-card { border-color: rgba(var(--accent-rgb), .35); }
+.invite-code { font-size: 34px; font-weight: 800; letter-spacing: .25em; text-align: center; padding: 16px; margin: 12px 0; border-radius: 14px; background: var(--panel2); border: 1px dashed rgba(var(--accent-rgb), .6); color: var(--accent); }
+@media (max-width: 760px) {
+  .book-switch { display: none; }
+  .sync-pill { display: none; }
+  .mobile-book { display: block; }
+}
+
+.mobile-book { display: none; margin-bottom: 12px; }
+.mobile-book select { width: 100%; font-weight: 600; }
+@media (max-width: 760px) { .mobile-book { display: block; } }
