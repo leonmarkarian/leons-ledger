@@ -1,5 +1,5 @@
 :root {
-  --bg: #000000; --panel: #0a0a0a; --panel2: #141414; --line: #222222; --text: #e7eaf0; --muted: #8a93a6;
+  --bg: #0a1628; --panel: #0f1f38; --panel2: #152a4a; --line: #1f3a63; --text: #e7eaf0; --muted: #9fb0cc;
   --accent: #7c9cff; --good: #5fd3a7; --warn: #f2b45b; --bad: #f07a8a; --radius: 14px;
   font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
 }
