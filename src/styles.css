@@ -211,3 +211,62 @@ main::-webkit-scrollbar-thumb:hover { background: rgba(var(--accent-rgb), .45); 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
 }
+
+/* ================= Phone layout ================= */
+@media (max-width: 760px) {
+  html, body { font-size: 15px; }
+  body { flex-direction: column; overflow: hidden; }
+  main { padding: calc(18px + env(safe-area-inset-top)) 14px calc(96px + env(safe-area-inset-bottom)); -webkit-overflow-scrolling: touch; }
+  .sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; z-index: 30;
+    flex-direction: row; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); gap: 0;
+    border-right: 0; border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(14px);
+  }
+  .brand, .update-pill { display: none !important; }
+  nav { flex-direction: row; width: 100%; overflow-x: auto; scrollbar-width: none; gap: 2px; }
+  nav::-webkit-scrollbar { display: none; }
+  nav { overflow: visible; }
+  nav button { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 3px; padding: 7px 2px; font-size: 9.5px; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  nav button span { width: auto; font-size: 17px; }
+  nav button:hover { transform: none; }
+  nav button.active { box-shadow: inset 0 3px 0 var(--accent); }
+
+  h1 { font-size: 21px; } .sub { margin-bottom: 16px; }
+  .g3, .g2, .g21, .g12 { grid-template-columns: 1fr; }
+  .g3 { grid-template-columns: 1fr 1fr; } .g3 > :first-child { grid-column: 1 / -1; }
+  .stat .value { font-size: 22px; }
+  .card { padding: 15px; }
+  .card:hover { transform: none; }
+  .form-grid { grid-template-columns: 1fr; }
+  input, select, textarea { font-size: 16px; } /* stops iPhone zooming into fields */
+  input.big { font-size: 26px; }
+  .row.between { flex-wrap: wrap; gap: 10px; }
+  .btn { padding: 11px 14px; }
+  .tabs { display: flex; overflow-x: auto; max-width: 100%; }
+  .tabs button { flex: 1 0 auto; }
+  .card:has(table) { overflow-x: auto; }
+  table { min-width: 520px; }
+  .msg { max-width: 88%; }
+  #toasts { left: 12px; right: 12px; bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .toast { max-width: none; }
+
+  /* Plan editor stacks on small screens */
+  .sticky-bar { top: calc(-18px - env(safe-area-inset-top)); }
+  .sticky-bar .row.between > .row { flex-wrap: wrap; }
+  .plan-sec-head { grid-template-columns: 38px 1fr auto; }
+  .plan-sec-head select { grid-column: 1 / 3; }
+  .plan-sec-head .pct-input { grid-column: 3 / 4; width: 96px; }
+  .plan-sec-head .icon-btn { grid-row: 1; grid-column: 3; justify-self: end; }
+  .plan-sec-head input[data-k="name"] { grid-column: 2 / 3; }
+  .plan-cats { padding-left: 0; }
+  .plan-sec { padding: 12px; }
+  .plan-sec-head > *, .plan-cat > * { min-width: 0; }
+  .plan-sec-head input:not([type=color]), .plan-sec-head select, .plan-cat input, .plan-cat .money-input, .plan-cat .pct-input { width: 100%; }
+  .plan-cat { grid-template-columns: 1fr 90px auto; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .plan-cat.small.muted { display: none; }
+  .plan-cat > .money-input, .plan-cat > input[data-k="note"] { grid-column: 1 / 3; }
+  .plan-cat > .icon-btn { grid-row: 1; grid-column: 3; }
+  .plan-cat > .pct-input { grid-row: 1; grid-column: 2; }
+}

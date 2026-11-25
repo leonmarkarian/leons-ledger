@@ -229,12 +229,12 @@
               <button class="btn primary mt" id="sSave">Save settings</button>
             </div>
             <div class="card mt"><h2>Backup</h2>
-              <p class="muted small" style="margin-top:0">Your data lives in your Windows user folder and survives updates. Export a backup now and then anyway.</p>
+              <p class="muted small" style="margin-top:0">Your data is stored only on this device and survives updates. Export a backup now and then anyway.</p>
               <div class="row wrap"><button class="btn" id="bExport">Export backup</button><button class="btn" id="bImport">Import backup</button><button class="btn ghost" id="bFolder">Open data folder</button></div>
               <button class="btn danger ghost mt" id="bReset">Reset everything…</button>
             </div>
             <div class="card mt"><h2>Updates</h2>
-              <p class="muted small" style="margin-top:0" id="updText">Version <span id="verText"></span>. The app checks for updates automatically on launch.</p>
+              <p class="muted small" style="margin-top:0" id="updText">Version <span id="verText"></span>. ${api.platform === 'web' ? 'The app updates itself automatically whenever you open it online.' : 'The app checks for updates automatically on launch.'}</p>
               <button class="btn" id="uCheck">Check for updates</button>
             </div>
           </div>
@@ -579,6 +579,7 @@
       const key = state.settings.apiKey; state = L.migrate(data); state.settings.apiKey = state.settings.apiKey || key;
       await persist(); toast('Backup imported.'); render();
     };
+    if (api.platform === 'web') $('#bFolder').classList.add('hidden');
     $('#bFolder').onclick = () => api.openDataFolder();
     $('#bReset').onclick = async () => {
       if (!(await confirmBox('Reset everything?', 'This deletes all incomes, payments and your plan, and restores the default setup. Export a backup first if you might want it back. This cannot be undone.', 'Reset'))) return;

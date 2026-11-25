@@ -36,6 +36,13 @@ To ship an update:
 
 Without GitHub: build or receive a newer installer and run it over the current install. Your data stays.
 
+## Phone version
+The same app runs on phones at https://leonmarkarian.github.io/leons-ledger/.
+- **Android (Chrome):** open the link, then choose ⋮ → **Add to Home screen** / **Install app**.
+- **iPhone (Safari):** open the link, then choose Share → **Add to Home Screen**.
+
+It updates itself every time you open it while you're online, and it works offline too. Data on the phone is separate from the PC. Use Settings → Export/Import backup to move data between them.
+
 ## Developing
 ```
 npm install
