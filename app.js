@@ -15,6 +15,9 @@
   let state = null;
   let page = 'dashboard';
   let draftPlan = null;        // copy of sections while editing the plan
+  let planEditing = false;     // split plan: overview (false) or editor (true)
+  let planExample = null;      // example paycheck used to show the plan in money
+  const planOpen = new Set();  // category detail panels open in the editor
   let lastPaymentMsg = null;
   let lastIncomeId = null;
   let aiBusy = false;
@@ -198,7 +201,7 @@
   function systemPrompt() {
     return [
       "You are the built-in financial advisor inside Leon's Ledger, a personal budgeting app." + (state.settings.userName ? ` The user's name is ${state.settings.userName}.` : ''),
-      'You see their split plan (sections and categories with percentages), current balances, debts, goals, wallets and recent activity.',
+      'You see their split plan (buckets and categories with percentages), current balances, debts, goals, wallets and recent activity.',
       'Give practical, specific, encouraging but honest advice in plain language. Use their real numbers. Keep it concise:',
       'short paragraphs or a few bullet points, no tables, no markdown headers. Suggest concrete amounts or percentage changes when useful.',
       'You are not a licensed financial advisor: do not recommend specific stocks, coins or trades; talk about strategy (debt payoff order, emergency fund, diversification, savings rate, goal timelines).'
@@ -323,106 +326,82 @@
   const pages = {
     dashboard() {
       const b = L.balances(state);
-      const latest = state.incomes[state.incomes.length - 1];
-      const recent = activity().slice(0, 6);
-      const bizSecs = b.sections.filter((s) => s.type === 'business');
-      const bizAvail = L.round2(L.sum(bizSecs, (s) => s.available));
-      const personalAvail = L.round2(b.totalAvailable - bizAvail);
+      const recent = activity().slice(0, 5);
       const wallets = L.walletBalances(state);
       const due = L.dueRecurring(state).filter((r) => !r.auto);
-      const soon = L.upcomingRecurring(state, null, 3);
+      const byType = (types) => L.round2(L.sum(b.sections.filter((s) => types.includes(s.type)), (s) => s.available));
+      const left = byType(['spend', 'other']); const saved = byType(['save', 'invest']); const biz = byType(['business']);
+      const owed = L.round2(L.sum(b.sections.filter((s) => s.type === 'debt').flatMap((s) => s.categories), (c) => c.progress && c.progress.kind === 'debt' ? c.progress.remaining : 0));
+      const inWallets = L.round2(L.sum(wallets, (w) => w.balance));
+      const meta = root.meta[root.active];
+      const hour = new Date().getHours(); const hi = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+      const who = state.settings.userName ? `, ${esc(state.settings.userName)}` : '';
       return `
         ${Object.keys(root.books).length > 1 ? `<div class="mobile-book"><select id="bookSwitch2">${Object.keys(root.books).map((k) => `<option value="${k}" ${k === root.active ? 'selected' : ''}>${esc(root.meta[k].name || 'Budget')}${root.meta[k].shared ? ' 👥' : ''}</option>`).join('')}</select></div>` : ''}
-        <div class="row between"><div><h1>Dashboard${root.meta[root.active].shared ? ` <span class="tag">👥 ${esc(root.meta[root.active].name)}</span>` : ''}</h1>${root.meta[root.active].shared && root.meta[root.active].members ? `<div class="members">${root.meta[root.active].members.map((u) => `<span class="avatar" title="${esc(u)}">${esc(u.charAt(0).toUpperCase())}</span>`).join('')}<span class="muted small">${root.meta[root.active].members.map(nice).map(esc).join(' & ')}</span></div>` : ''}<p class="sub">Where your money is right now.${syncState.status === 'ok' ? ' <span class="good small">✓ Synced</span>' : syncState.status === 'offline' ? ' <span class="muted small">○ Offline</span>' : ''}</p></div>
-          <div class="row"><button class="btn" data-go="spend">− Spend / Pay</button><button class="btn primary" data-go="income">＋ Log income</button></div></div>
-        <div class="grid g3">
-          <div class="card stat"><div class="label">Available${bizSecs.length ? ' (personal)' : ' across all buckets'}</div><div class="value ${personalAvail < 0 ? 'bad' : ''}" data-count="${personalAvail}">${m(personalAvail)}</div>${bizSecs.length ? `<div class="muted small mt-s">Business kept separate: <b>${m(bizAvail)}</b></div>` : ''}</div>
-          <div class="card stat"><div class="label">Total income logged</div><div class="value good" data-count="${b.totalIncome}">${m(b.totalIncome)}</div><div class="muted small mt-s">${state.incomes.length} payment${state.incomes.length === 1 ? '' : 's'}</div></div>
-          <div class="card stat"><div class="label">Spent & paid</div><div class="value" data-count="${b.totalSpent}">${m(b.totalSpent)}</div><div class="muted small mt-s">${state.transactions.length} entr${state.transactions.length === 1 ? 'y' : 'ies'}</div></div>
+        <div class="home-top"><p class="muted hi">${hi}${who}</p><h1>${meta.shared ? esc(meta.name) : 'Home'}</h1>
+          ${meta.shared && meta.members ? `<div class="members">${meta.members.map((u) => `<span class="avatar" title="${esc(u)}">${esc(u.charAt(0).toUpperCase())}</span>`).join('')}<span class="muted small">${meta.members.map(nice).map(esc).join(' & ')}${syncState.status === 'ok' ? ' · <span class="good">✓ Synced</span>' : ''}</span></div>` : ''}</div>
+        <div class="card hero">
+          <div class="label">Left to spend</div>
+          <div class="value ${left < 0 ? 'bad' : ''}" data-count="${left}">${m(left)}</div>
+          <div class="hero-row">
+            <div><span>Saved</span><b>${m(saved)}</b></div>
+            ${owed > 0 ? `<div><span>Still owed</span><b>${m(owed)}</b></div>` : ''}
+            <div><span>In your wallets</span><b>${m(inWallets)}</b></div>
+            ${biz ? `<div><span>Business</span><b>${m(biz)}</b></div>` : ''}
+          </div>
         </div>
-        ${due.length || soon.length ? `<div class="card mt due-card"><h2>🔔 Bills</h2>
-          ${due.map((r) => `<div class="row between due-row"><div><b>${esc(r.name)}</b> <span class="muted small">due on the ${ord(r.day)} · ${m(r.amount)}</span></div><button class="btn sm primary" data-paydue="${r.id}">Mark paid</button></div>`).join('')}
-          ${soon.map((r) => `<div class="row between due-row"><div>${esc(r.name)} <span class="muted small">coming up on the ${ord(r.day)} · ${m(r.amount)}${r.auto ? ' · logs automatically' : ''}</span></div></div>`).join('')}
+        <div class="quick">
+          <button class="btn primary big-btn" data-go="income"><span>＋</span> Money in</button>
+          <button class="btn big-btn" data-go="spend" data-mode="spend"><span>−</span> Money out</button>
+        </div>
+        ${due.length ? `<div class="card mt due-card"><h2>🔔 Bills due</h2>
+          ${due.map((r) => `<div class="row between due-row"><div><b>${esc(r.name)}</b> <span class="muted small">${m(r.amount)} · due the ${ord(r.day)}</span></div><button class="btn sm primary" data-paydue="${r.id}">Mark paid</button></div>`).join('')}
         </div>` : ''}
-        <div class="card mt"><div class="row between"><h2>Wallets</h2><button class="btn sm ghost" data-go="settings">Manage</button></div>
-          <div class="wallets">${wallets.map((w) => `<div class="wallet"><div class="muted small">${esc(w.name)}</div><div class="w-bal ${w.balance < 0 ? 'bad' : ''}">${m(w.balance)}</div></div>`).join('')}</div>
+        <div class="card mt"><div class="row between"><h2>Your buckets</h2><button class="btn sm ghost" data-go="plan">Plan</button></div>
+          <div class="bk-list">${b.sections.map((sec) => bucketRow(sec)).join('')}</div>
         </div>
-        <div class="card mt"><div class="row between"><h2>Your split plan</h2><button class="btn sm ghost" data-go="plan">Edit plan</button></div>
-          <div class="split-bar">${state.sections.map((s) => `<i style="width:${s.percent}%;background:${s.color}" title="${esc(s.name)} ${s.percent}%"></i>`).join('')}</div>
-          <div class="legend">${state.sections.map((s) => `<span><b style="background:${s.color}"></b>${esc(s.name)} ${s.percent}%</span>`).join('')}</div>
-        </div>
-        ${latest && (latest.advice || aiBusy) ? `<div class="card advice-card mt"><div class="row between"><h2>✦ Advisor on your last income (${m(latest.amount)}, ${fmtDate(latest.date)})</h2>
-            <button class="btn sm ghost" data-reask="${latest.id}" ${aiBusy ? 'disabled' : ''}>Refresh advice</button></div>
-          <div class="advice md">${aiBusy && !latest.advice ? '<span class="typing">Thinking about your money…</span>' : md(latest.advice || 'No advice yet — click Refresh advice.')}</div>
-          ${aiBusy && latest.advice ? '<div class="typing mt-s">Updating…</div>' : ''}</div>` : ''}
-        <div class="grid g2 mt">${b.sections.map(sectionCard).join('')}</div>
-        <div class="card mt"><div class="row between"><h2>Recent activity</h2><button class="btn sm ghost" data-go="history">See all</button></div>
-          ${recent.length ? activityTable(recent, false) : '<div class="empty">Nothing logged yet. Start by logging an income.</div>'}</div>`;
+        <div class="card mt"><div class="row between"><h2>Recent</h2><button class="btn sm ghost" data-go="history">See all</button></div>
+          ${recent.length ? activityList(recent, false) : '<div class="empty">Nothing yet. Tap <b>Money in</b> when you get paid.</div>'}</div>`;
     },
 
     income() {
       const preview = incomePreviewHtml(0);
-      return `<h1>Log income</h1><p class="sub">Enter what you got paid. It's split automatically by your plan — tweak it for this payment if you want.</p>
+      return `<h1>Money in</h1><p class="sub">Type what you got paid. It's split into your buckets automatically.</p>
         <div class="grid g12">
           <div class="card">
-            <label class="f">Amount received<div class="amount-row"><input class="big" id="incAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00" autofocus>${currencySelect('incCur')}</div></label>
+            <label class="f">How much?<div class="amount-row"><input class="big" id="incAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" autofocus>${currencySelect('incCur')}</div></label>
             <div class="small muted mt-s" id="incConv"></div>
-            <div class="form-grid mt">
-              <label class="f">Date<input id="incDate" type="date" value="${today()}"></label>
-              <label class="f">Received into<select id="incWallet">${walletOptions()}</select></label>
-              <label class="f">Source<input id="incSource" placeholder="e.g. Agency salary, freelance"></label>
-              <label class="f full">Note<input id="incNote" placeholder="Optional"></label>
-            </div>
-            <label class="row mt small muted"><input type="checkbox" id="incCustom"> Adjust section percentages for this income only</label>
+            <label class="f mt">Into<select id="incWallet">${walletOptions()}</select></label>
+            <details class="more mt"><summary>More details</summary>
+              <div class="form-grid mt-s">
+                <label class="f">Date<input id="incDate" type="date" value="${today()}"></label>
+                <label class="f">From<input id="incSource" placeholder="e.g. Salary"></label>
+                <label class="f full">Note<input id="incNote" placeholder="Optional"></label>
+              </div>
+              <label class="row mt-s small muted"><input type="checkbox" id="incCustom"> Change the split for this paycheck only</label>
+            </details>
             <div class="errors mt-s" id="incErr"></div>
-            <button class="btn primary mt" id="incSave" style="width:100%">Save income & split it</button>
+            <button class="btn primary mt" id="incSave" style="width:100%">Save</button>
           </div>
-          <div class="card"><h2>Split preview</h2><div id="incPreview">${preview}</div></div>
+          <div class="card"><h2>Where it goes</h2><div id="incPreview">${preview}</div></div>
         </div>
         ${lastIncomeId ? lastIncomeAdviceHtml() : ''}`;
     },
 
     spend() {
-      return `<h1>Spend / Pay</h1><p class="sub">Log money leaving a bucket — a purchase, a debt payment, an investment — or move money between buckets.</p>
-        <div class="tabs">${[['spend', 'Spend / Pay'], ['transfer', 'Move between buckets'], ['wallet', 'Move between wallets'], ['recurring', 'Recurring bills']].map(([k, l]) => `<button data-tab="${k}" class="${spendTab === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      const titles = { spend: ['Money out', 'Something you bought or paid.'], transfer: ['Move money', 'Shift money between buckets or between wallets.'], wallet: ['Move money', 'Shift money between buckets or between wallets.'], recurring: ['Repeating bills', 'Rent, subscriptions, loans: logged or reminded every month.'] };
+      const [t, sub] = titles[spendTab];
+      const toggle = spendTab === 'transfer' || spendTab === 'wallet' ? `<div class="seg mt-s"><button data-tab="transfer" class="${spendTab === 'transfer' ? 'active' : ''}">Between buckets</button><button data-tab="wallet" class="${spendTab === 'wallet' ? 'active' : ''}">Between wallets</button></div>` : '';
+      const links = spendTab === 'spend' ? `<div class="sub-links"><button class="link" data-tab="transfer">⇄ Move money</button><button class="link" data-tab="recurring">🔁 Repeating bills</button></div>` : `<div class="sub-links"><button class="link" data-tab="spend">← Back to Money out</button></div>`;
+      return `<h1>${t}</h1><p class="sub">${sub}</p>${toggle}
+        ${lastPaymentMsg ? `<div class="card result-card mt">✓ ${esc(lastPaymentMsg)}</div>` : ''}
         ${({ spend: spendForm, transfer: transferForm, wallet: walletTransferForm, recurring: recurringPanel })[spendTab]()}
-        ${lastPaymentMsg ? `<div class="card result-card mt">✓ ${esc(lastPaymentMsg)}</div>` : ''}`;
+        ${links}`;
     },
 
     plan() {
-      if (!draftPlan) draftPlan = JSON.parse(JSON.stringify(state.sections));
-      const v = L.validatePlan(draftPlan);
-      const types = Object.entries(L.SECTION_TYPES);
-      return `<div class="sticky-bar"><div class="row between"><div><h1>Split plan</h1><p class="sub" style="margin:0">Sections get a % of each income; categories get a % of their section. Edit anything.</p></div>
-          <div class="row"><button class="btn ghost" id="planReset">Discard changes</button><button class="btn" id="planAddSec">＋ Add section</button><button class="btn primary" id="planSave" ${v.ok ? '' : 'disabled'}>Save plan</button></div></div>
-          <div class="row mt-s between"><div class="small">Sections total: <b id="planTotal" class="${Math.abs(v.total - 100) < 0.001 ? 'good' : 'bad'}">${v.total}%</b></div>
-          <div class="errors" id="planErrors">${v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div></div>
-        ${draftPlan.map((s, si) => {
-          const ct = L.round2(L.sum(s.categories, (c) => Number(c.percent) || 0));
-          return `<div class="plan-sec" style="--c:${s.color}">
-            <div class="plan-sec-head">
-              <input type="color" value="${s.color}" data-s="${si}" data-k="color">
-              <input value="${esc(s.name)}" data-s="${si}" data-k="name" placeholder="Section name">
-              <select data-s="${si}" data-k="type">${types.map(([k, t]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
-              <div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" value="${s.percent}" data-s="${si}" data-k="percent"></div>
-              <button class="icon-btn" data-delsec="${si}" title="Delete section">✕</button>
-            </div>
-            <div class="plan-cats">
-              <div class="plan-cat small muted"><span>Category</span><span>% of section</span><span>${s.type === 'debt' ? 'Total owed' : 'Goal (optional)'}</span><span>${s.type === 'debt' ? 'Interest % per year · Minimum payment' : 'Note'}</span><span></span></div>
-              ${s.categories.map((c, ci) => `<div class="plan-cat">
-                <input value="${esc(c.name)}" data-s="${si}" data-c="${ci}" data-k="name" placeholder="Category name">
-                <div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div>
-                <div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" value="${c.target || ''}" placeholder="—" data-s="${si}" data-c="${ci}" data-k="target"></div>
-                ${s.type === 'debt' ? `<div class="debt-extra"><div class="pct-input" title="Yearly interest rate"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.1" value="${c.apr || ''}" placeholder="Interest/yr" data-s="${si}" data-c="${ci}" data-k="apr"></div>
-                  <div class="money-input" data-sym="${sym()}" title="Minimum monthly payment"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" value="${c.minPayment || ''}" placeholder="Min/month" data-s="${si}" data-c="${ci}" data-k="minPayment"></div></div>`
-                  : `<input value="${esc(c.note || '')}" data-s="${si}" data-c="${ci}" data-k="note" placeholder="Optional">`}
-                <button class="icon-btn" data-delcat="${si}|${ci}" title="Delete category">✕</button></div>`).join('')}
-              <div class="row between"><button class="btn sm" data-addcat="${si}">＋ Add category</button>
-                <span class="small">Categories total: <b data-cattotal="${si}" class="${Math.abs(ct - 100) < 0.001 ? 'good' : 'bad'}">${ct}%</b>
-                <button class="btn sm ghost ${Math.abs(ct - 100) > 0.001 ? '' : 'hidden'}" data-even="${si}">Split evenly</button></span></div>
-            </div></div>`;
-        }).join('')}
-        <p class="muted small">Changing the plan only affects future incomes. Past incomes keep the split they were saved with, so your history stays accurate.</p>`;
+      if (planExample == null) { const avg = L.avgMonthlyIncome(state, 3); planExample = avg ? Math.round(avg / 10) * 10 : 1000; }
+      return planEditing ? planEditorHtml() : planOverviewHtml();
     },
 
     goals() {
@@ -501,9 +480,9 @@
 
     history() {
       const rows = activity().filter((r) => historyFilter === 'all' || r.kind === historyFilter);
-      return `<h1>History</h1><p class="sub">Every income, payment and transfer. Click ✎ to edit or ✕ to delete.</p>
+      return `<div class="row between"><div><h1>History</h1><p class="sub">Everything you've logged. Tap ✎ to edit or ✕ to delete.</p></div><button class="btn sm" data-go="reports">▦ Reports & export</button></div>
         <div class="tabs">${[['all', 'All'], ['income', 'Income'], ['spend', 'Spending & payments'], ['transfer', 'Transfers']].map(([k, l]) => `<button data-filter="${k}" class="${historyFilter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
-        <div class="card">${rows.length ? activityTable(rows, true) : '<div class="empty">Nothing here yet.</div>'}</div>`;
+        <div class="card">${rows.length ? activityList(rows, true) : '<div class="empty">Nothing here yet.</div>'}</div>`;
     },
 
     advisor() {
@@ -602,20 +581,152 @@
     }
   };
 
+  // ---------------- Split plan: overview + editor ----------------
+  const PURPOSE = { spend: 'money you use day to day', save: 'kept for your goals', debt: 'goes to what you owe', invest: 'put to work', business: 'kept apart for your business', other: 'for anything else' };
+  const pctTxt = (x) => `${L.round2(x)}%`;
+  function planBar(sections) {
+    return `<div class="split-bar big">${sections.map((s) => `<i style="width:${Number(s.percent) || 0}%;background:${s.color}" title="${esc(s.name)} ${s.percent}%">${(Number(s.percent) || 0) >= 9 ? `<span>${L.round2(s.percent)}%</span>` : ''}</i>`).join('')}</div>`;
+  }
+  function catChips(sec, c) {
+    const out = [];
+    if (sec.type === 'debt') {
+      if (c.target) out.push(`Owes ${m(c.target)}`);
+      if (c.apr) out.push(`${L.round2(c.apr)}% interest/yr`);
+      if (c.minPayment) out.push(`min ${m(c.minPayment)}/month`);
+    } else if (c.target) out.push(`Goal ${m(c.target)}`);
+    if (c.note) out.push(esc(c.note));
+    return out.length ? `<div class="chips">${out.map((x) => `<span class="chip">${x}</span>`).join('')}</div>` : '';
+  }
+  function planOverviewHtml() {
+    const secs = state.sections, ex = planExample;
+    return `<div class="row between plan-top"><div><h1>Split plan</h1><p class="sub">How every paycheck is divided between your buckets.</p></div>
+        <button class="btn primary" id="planEdit">✎ Edit plan</button></div>
+      <div class="card plan-ov">
+        <div class="ex-row"><span>If you get paid</span><div class="money-input ex-input" data-sym="${sym()}"><input id="planEx" type="text" inputmode="decimal" autocomplete="off" value="${ex}"></div><span class="muted">it's split like this:</span></div>
+        ${planBar(secs)}
+        <div class="ov-list">${secs.map((sec, si) => `
+          <div class="ov-sec" style="--c:${sec.color}">
+            <div class="ov-head"><span class="dot"></span>
+              <div class="ov-name"><b>${esc(sec.name)}</b><span class="muted small">${L.SECTION_TYPES[sec.type].label} · ${PURPOSE[sec.type] || ''}</span></div>
+              <div class="ov-amt"><b data-exs="${si}">${m(ex * sec.percent / 100)}</b><span class="muted small">${pctTxt(sec.percent)} of paycheck</span></div></div>
+            <div class="ov-cats">${sec.categories.map((c, ci) => `
+              <div class="ov-cat">
+                <div class="ov-cat-name"><span>${esc(c.name)}</span><span class="muted small">${pctTxt(sec.percent * c.percent / 100)} of paycheck${sec.categories.length > 1 ? ` · ${pctTxt(c.percent)} of ${esc(sec.name)}` : ''}</span>${catChips(sec, c)}</div>
+                <b data-exc="${si}|${ci}">${m(ex * sec.percent / 100 * c.percent / 100)}</b>
+                <div class="mini-bar"><i style="width:${Number(c.percent) || 0}%"></i></div>
+              </div>`).join('')}</div>
+          </div>`).join('')}</div>
+      </div>
+      <p class="muted small">Changing the plan only affects future paychecks. Past ones keep the split they were saved with, so your history stays accurate.</p>`;
+  }
+  function assignStatus(total, ofWhat) {
+    const d = L.round2(100 - total);
+    if (Math.abs(d) < 0.001) return { cls: 'good', text: `100% of ${ofWhat} assigned ✓` };
+    return d > 0 ? { cls: 'warn', text: `${d}% of ${ofWhat} still to assign` } : { cls: 'bad', text: `${-d}% too much — lower something` };
+  }
+  function detailsLabel(sec, c) {
+    if (sec.type === 'debt') return c.target ? `Owes ${m(c.target)}` : 'Debt details';
+    return c.target ? `Goal ${m(c.target)}` : (c.note ? 'Note' : 'Goal / note');
+  }
+  function planEditorHtml() {
+    if (!draftPlan) draftPlan = JSON.parse(JSON.stringify(state.sections));
+    const v = L.validatePlan(draftPlan); const st = assignStatus(v.total, 'your paycheck');
+    const types = Object.entries(L.SECTION_TYPES); const ex = planExample;
+    return `<div class="sticky-bar plan-edit-bar"><div class="row between"><div><h1>Edit split plan</h1>
+          <div class="assign ${st.cls}" id="planStatus">${st.text}</div></div>
+        <div class="row"><button class="btn ghost" id="planCancel">Cancel</button><button class="btn primary" id="planSave" ${v.ok ? '' : 'disabled'}>Save plan</button></div></div>
+        <div class="errors" id="planErrors">${v.errors.filter((e) => !/^Buckets add up/.test(e)).map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div>
+      <p class="muted small">Amounts are shown for a ${m(ex)} paycheck and update as you type.</p>
+      ${draftPlan.map((sec, si) => {
+        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0)); const cs = assignStatus(ct, esc(sec.name || 'this bucket'));
+        return `<div class="plan-sec" style="--c:${sec.color}">
+          <div class="ps-head">
+            <input type="color" value="${sec.color}" data-s="${si}" data-k="color" title="Bucket colour">
+            <label class="f ps-name">Bucket name<input value="${esc(sec.name)}" data-s="${si}" data-k="name" placeholder="e.g. Needs"></label>
+            <label class="f ps-type">Used for<select data-s="${si}" data-k="type">${types.map(([k, t]) => `<option value="${k}" ${sec.type === k ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>
+            <label class="f ps-pct">Share of paycheck<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${sec.percent}" data-s="${si}" data-k="percent"></div></label>
+            <button class="icon-btn ps-del" data-delsec="${si}" title="Delete bucket">✕</button>
+          </div>
+          <div class="ps-help muted small" data-sechelp="${si}">= <b>${m(ex * (Number(sec.percent) || 0) / 100)}</b> of every ${m(ex)} paycheck</div>
+          <div class="ps-cats">
+            <div class="ps-cats-head"><span class="small"><b>Categories in ${esc(sec.name || 'this bucket')}</b></span>
+              <span class="assign small ${cs.cls}" data-catstatus="${si}">${cs.text}</span>
+              <button class="btn sm ghost ${Math.abs(ct - 100) > 0.001 ? '' : 'hidden'}" data-even="${si}">Split evenly</button></div>
+            ${sec.categories.map((c, ci) => { const key = si + '|' + ci; const open = planOpen.has(sec.id + '|' + c.id);
+              return `<div class="pc-row ${open ? 'open' : ''}">
+                <label class="f pc-name">Category<input value="${esc(c.name)}" data-s="${si}" data-c="${ci}" data-k="name" placeholder="e.g. Groceries"></label>
+                <label class="f pc-pct">% of ${esc(sec.name || 'bucket')}<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div></label>
+                <div class="pc-amt" data-cathelp="${key}"><b>${m(ex * (Number(sec.percent) || 0) / 100 * (Number(c.percent) || 0) / 100)}</b><span class="muted small">${pctTxt((Number(sec.percent) || 0) * (Number(c.percent) || 0) / 100)} of paycheck</span></div>
+                <button class="btn sm ghost pc-more" data-details="${sec.id}|${c.id}">${detailsLabel(sec, c)} <span class="chev">▾</span></button>
+                <button class="icon-btn pc-del" data-delcat="${key}" title="Delete category">✕</button>
+                <div class="pc-details">
+                  ${sec.type === 'debt' ? `
+                    <label class="f">Total owed<div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" value="${c.target || ''}" placeholder="0" data-s="${si}" data-c="${ci}" data-k="target"></div></label>
+                    <label class="f">Interest per year<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${c.apr || ''}" placeholder="0" data-s="${si}" data-c="${ci}" data-k="apr"></div></label>
+                    <label class="f">Minimum monthly payment<div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" value="${c.minPayment || ''}" placeholder="0" data-s="${si}" data-c="${ci}" data-k="minPayment"></div></label>`
+                  : `<label class="f">${sec.type === 'spend' ? 'Target amount (optional)' : 'Goal amount (optional)'}<div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" value="${c.target || ''}" placeholder="e.g. 5000" data-s="${si}" data-c="${ci}" data-k="target"></div></label>
+                    <label class="f pc-note">Note (optional)<input value="${esc(c.note || '')}" data-s="${si}" data-c="${ci}" data-k="note" placeholder="Anything to remember"></label>`}
+                </div>
+              </div>`; }).join('')}
+            <button class="btn sm" data-addcat="${si}">＋ Add category</button>
+          </div></div>`;
+      }).join('')}
+      <button class="btn add-bucket" id="planAddSec">＋ Add bucket</button>
+      <p class="muted small">Changing the plan only affects future paychecks. Past ones keep the split they were saved with.</p>`;
+  }
+
   // ---------------- Page fragments ----------------
+  function bucketRow(sec) {
+    const kept = sec.type === 'save' || sec.type === 'invest';
+    const cats = sec.categories;
+    let pct, cls = '';
+    if (sec.type === 'debt') {
+      const t = L.sum(cats, (c) => (c.progress && c.progress.target) || 0); const d = L.sum(cats, (c) => (c.progress && c.progress.done) || 0);
+      pct = t ? (d / t) * 100 : 0;
+    } else if (kept) {
+      const t = L.sum(cats, (c) => c.target || 0); pct = t ? Math.min(100, (Math.max(0, sec.available) / t) * 100) : 0;
+    } else {
+      const got = L.sum(cats, (c) => c.allocated + c.transferIn - c.transferOut); const spent = L.sum(cats, (c) => c.spent);
+      pct = got > 0 ? Math.min(100, (spent / got) * 100) : 0; if (spent > got) cls = 'over';
+    }
+    const word = sec.available < 0 ? 'over' : kept ? 'saved' : sec.type === 'debt' ? 'to pay' : 'left';
+    const amt = sec.available < 0 ? m(-sec.available) : m(sec.available);
+    return `<details class="bk" style="--c:${sec.color}"><summary>
+        <span class="dot"></span><span class="bk-name">${esc(sec.name)}</span>
+        <span class="bk-amt ${sec.available < 0 ? 'bad' : ''}"><b>${amt}</b><small>${word}</small></span>
+        <span class="bar ${cls}"><i style="width:${pct}%"></i></span></summary>
+      <div class="bk-cats">${cats.map((c) => {
+        const got = L.round2(c.allocated + c.transferIn - c.transferOut);
+        let line;
+        if (c.progress && c.progress.kind === 'debt') line = `${m(c.progress.remaining)} still owed`;
+        else if (c.progress) line = `${Math.round(c.progress.pct)}% of ${m(c.progress.target)} goal`;
+        else if (got > 0 || c.spent) line = `${m(c.spent)} of ${m(got)} used`;
+        else line = 'Nothing yet';
+        return `<div class="bk-cat"><span>${esc(c.name)}<small class="muted">${line}</small></span><b class="${c.available < 0 ? 'bad' : ''}">${c.available < 0 ? '−' + m(-c.available) : m(c.available)}</b></div>`;
+      }).join('')}</div></details>`;
+  }
   function sectionCard(s) {
     const type = L.SECTION_TYPES[s.type];
+    const kept = s.type === 'save' || s.type === 'invest';
+    const head = s.available < 0 ? `<span class="bad">Over by ${m(-s.available)}</span>` : m(s.available);
     return `<div class="card section-card" style="--c:${s.color}">
-      <div class="section-head"><div><span class="name">${esc(s.name)}</span><span class="tag">${type.label} · ${s.percent}%</span></div>
-        <div class="${s.available < 0 ? 'bad' : ''}" style="font-weight:700;font-size:16px">${m(s.available)}</div></div>
+      <div class="section-head"><div><div class="name">${esc(s.name)}</div><div class="muted small">${L.round2(s.percent)}% of each paycheck · ${type.label}</div></div>
+        <div class="sec-total"><b>${head}</b><span class="muted small">${s.available < 0 ? 'overspent' : kept ? 'saved' : 'available'}</span></div></div>
       ${s.categories.map((c) => {
-        let extra = '', barPct = c.allocated + c.transferIn > 0 ? Math.max(0, Math.min(100, (c.available / (c.allocated + c.transferIn)) * 100)) : 0;
-        if (c.progress && c.progress.kind === 'debt') { extra = `Paid ${m(c.progress.done)} of ${m(c.progress.target)} · <b>${m(c.progress.remaining)} still owed</b>`; barPct = c.progress.pct; }
-        else if (c.progress) { extra = `${Math.round(c.progress.pct)}% of ${m(c.progress.target)} goal`; barPct = c.progress.pct; }
-        else if (c.spent) extra = `${type.past} ${m(c.spent)} of ${m(c.allocated + c.transferIn - c.transferOut)}`;
-        return `<div class="cat-row"><div>${esc(c.name)} <span class="muted small">${c.percent}%</span>${extra ? `<div class="muted small">${extra}</div>` : ''}</div>
-          <div class="amt ${c.available < 0 ? 'bad' : ''}">${m(c.available)}<div class="muted small" style="font-weight:400">available</div></div>
-          <div class="bar"><i style="width:${barPct}%"></i></div></div>`;
+        const got = L.round2(c.allocated + c.transferIn - c.transferOut);
+        let line, barPct, barCls = '', label = kept ? 'saved' : s.type === 'debt' ? 'ready to pay' : 'left';
+        if (c.progress && c.progress.kind === 'debt') {
+          line = `${m(c.progress.done)} paid · <b>${m(c.progress.remaining)} still owed</b> of ${m(c.progress.target)}`; barPct = c.progress.pct;
+        } else if (c.progress) {
+          line = `${m(Math.max(0, c.available))} of ${m(c.progress.target)} goal · ${Math.round(c.progress.pct)}%`; barPct = c.progress.pct;
+        } else if (got > 0 || c.spent) {
+          line = `Received ${m(got)} · ${type.past} ${m(c.spent)}`;
+          barPct = got > 0 ? Math.min(100, (c.spent / got) * 100) : 100; if (c.spent > got) barCls = 'over';
+        } else { line = `Gets ${L.round2(s.percent * c.percent / 100)}% of each paycheck`; barPct = 0; }
+        const amt = c.available < 0 ? `<span class="bad">Over by ${m(-c.available)}</span>` : m(c.available);
+        return `<div class="cat-row"><div><div>${esc(c.name)}</div><div class="muted small">${line}</div></div>
+          <div class="amt">${amt}<div class="muted small" style="font-weight:400">${c.available < 0 ? 'over budget' : label}</div></div>
+          <div class="bar ${barCls}"><i style="width:${barPct}%"></i></div></div>`;
       }).join('')}</div>`;
   }
 
@@ -629,13 +740,15 @@
     return rows.sort((a, b) => b.date.localeCompare(a.date) || b.at - a.at);
   }
 
-  function activityTable(rows, editable) {
-    const pill = { income: '<span class="pill in">Income</span>', spend: '<span class="pill out">Paid</span>', transfer: '<span class="pill tr">Moved</span>' };
-    return `<table><thead><tr><th>Date</th><th>Type</th><th>What</th><th>Note</th><th class="num">Amount</th>${editable ? '<th></th>' : ''}</tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="muted">${fmtDate(r.date)}</td><td>${pill[r.kind]}</td><td>${esc(r.what)}${r.detail ? `<div class="muted small">${esc(r.detail)}</div>` : ''}</td>
-        <td class="muted">${esc(r.note || '')}</td><td class="num ${r.kind === 'income' ? 'good' : r.kind === 'spend' ? 'bad' : ''}">${r.kind === 'income' ? '+' : ''}${m(r.amount)}</td>
-        ${editable ? `<td class="num" style="white-space:nowrap">${r.wallet ? '' : `<button class="icon-btn" data-edit="${r.kind}|${r.id}" title="Edit">✎</button>`}<button class="icon-btn" data-del="${r.wallet ? 'wtransfer' : r.kind}|${r.id}" title="Delete">✕</button></td>` : ''}</tr>`).join('')}
-    </tbody></table>`;
+  function activityList(rows, editable) {
+    const ico = { income: ['in', '＋'], spend: ['out', '−'], transfer: ['tr', '⇄'] };
+    return `<div class="act-list">${rows.map((r) => `<div class="act-row">
+        <span class="act-ico ${ico[r.kind][0]}">${ico[r.kind][1]}</span>
+        <div class="act-main"><div class="act-what">${esc(r.what)}</div>
+          <div class="muted small">${fmtDate(r.date)}${r.detail ? ' · ' + esc(r.detail) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div></div>
+        <div class="act-amt ${r.kind === 'income' ? 'good' : r.kind === 'spend' ? 'bad' : ''}">${r.kind === 'income' ? '+' : ''}${m(r.amount)}</div>
+        ${editable ? `<div class="act-tools">${r.wallet ? '' : `<button class="icon-btn" data-edit="${r.kind}|${r.id}" title="Edit">✎</button>`}<button class="icon-btn" data-del="${r.wallet ? 'wtransfer' : r.kind}|${r.id}" title="Delete">✕</button></div>` : ''}
+      </div>`).join('')}</div>`;
   }
 
   function incomeOverrides() {
@@ -649,13 +762,17 @@
     const split = L.splitIncome(amount || 0, state.sections, overrides);
     const custom = $('#incCustom') && $('#incCustom').checked;
     const total = L.round2(L.sum(split.sectionAmounts, (x) => x.percent));
-    return `${state.sections.map((s, i) => {
+    const secs = state.sections.map((s, i) => Object.assign({}, s, { percent: split.sectionAmounts[i].percent }));
+    return `${amount ? '' : '<p class="muted small" style="margin-top:0">Type an amount to see where it goes.</p>'}
+    ${planBar(secs)}
+    ${state.sections.map((s, i) => {
       const sa = split.sectionAmounts[i];
-      return `<div style="padding:10px 0;border-top:1px solid var(--line)">
-        <div class="row between"><div class="row"><b style="width:10px;height:10px;border-radius:3px;background:${s.color};display:inline-block"></b><b>${esc(s.name)}</b>
-          ${custom ? `<div class="pct-input" style="width:90px"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" data-ov="${s.id}" value="${sa.percent}"></div>` : `<span class="muted small">${sa.percent}%</span>`}</div>
-          <b data-secamt="${s.id}">${m(sa.amount)}</b></div>
-        <div class="muted small mt-s" data-seccats="${s.id}">${s.categories.map((c) => { const a = split.allocations.find((x) => x.categoryId === c.id); return `${esc(c.name)} ${m(a.amount)}`; }).join(' · ')}</div></div>`;
+      return `<div class="pv-sec" style="--c:${s.color}">
+        <div class="pv-head"><span class="dot"></span><b>${esc(s.name)}</b>
+          ${custom ? `<div class="pct-input pv-pct"><input type="text" inputmode="decimal" autocomplete="off" data-ov="${s.id}" value="${sa.percent}"></div>` : `<span class="muted small">${sa.percent}%</span>`}
+          <b class="pv-amt" data-secamt="${s.id}">${m(sa.amount)}</b></div>
+        ${s.categories.length > 1 || s.categories[0].name !== s.name ? `<div class="pv-cats">${s.categories.map((c) => { const a = split.allocations.find((x) => x.categoryId === c.id); return `<div class="pv-cat"><span>${esc(c.name)}</span><span data-catamt="${c.id}">${m(a.amount)}</span></div>`; }).join('')}</div>` : ''}
+      </div>`;
     }).join('')}
     ${custom ? `<div class="small mt-s">Total: <b id="ovTotal" class="${Math.abs(total - 100) < 0.001 ? 'good' : 'bad'}">${total}%</b></div>` : ''}`;
   }
@@ -668,20 +785,22 @@
   }
 
   function spendForm() {
-    return `<div class="grid g12"><div class="card">
-      <label class="f">Which bucket is this from?<select id="spCat">${categoryOptions(spendForm.last)}</select></label>
-      <div id="spAvail" class="small muted mt-s"></div>
-      <div class="row between mt"><span class="small muted">Amount</span>
+    return `<div class="card simple-form">
+      <div class="row between"><span class="f-label">How much?</span>
         <button class="btn sm" id="spScan" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Reading receipt…' : '📷 Scan receipt'}</button><input type="file" id="spScanFile" accept="image/*" capture="environment" class="hidden"></div>
-      <div class="amount-row mt-s"><input class="big" id="spAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00">${currencySelect('spCur')}</div>
+      <div class="amount-row mt-s"><input class="big" id="spAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">${currencySelect('spCur')}</div>
       <div class="small muted mt-s" id="spConv"></div>
-      <div class="form-grid mt">
-        <label class="f">Date<input id="spDate" type="date" value="${today()}"></label>
-        <label class="f">Paid from wallet<select id="spWallet">${walletOptions(spendForm.lastWallet)}</select></label>
-        <label class="f full">Note<input id="spNote" placeholder="e.g. groceries, March installment"></label>
-      </div>
+      <label class="f mt">From which bucket?<select id="spCat">${categoryOptions(spendForm.last)}</select></label>
+      <div id="spAvail" class="small mt-s"></div>
+      <label class="f mt">Paid with<select id="spWallet">${walletOptions(spendForm.lastWallet)}</select></label>
+      <details class="more mt"><summary>More details</summary>
+        <div class="form-grid mt-s">
+          <label class="f">Date<input id="spDate" type="date" value="${today()}"></label>
+          <label class="f">Note<input id="spNote" placeholder="e.g. groceries"></label>
+        </div>
+      </details>
       <button class="btn primary mt" id="spSave" style="width:100%">Save</button>
-    </div><div class="card"><h2>Bucket status</h2><div id="spStatus"></div></div></div>`;
+    </div>`;
   }
 
   function transferForm() {
@@ -772,11 +891,10 @@
   }
   function openAddSheet() {
     sheet('Add', [
-      { icon: '＋', label: 'Log income', sub: 'Split a payment into your buckets', run: () => go('income') },
-      { icon: '−', label: 'Spend / Pay', sub: 'Groceries, a bill, a debt payment', run: () => { spendTab = 'spend'; go('spend'); } },
-      { icon: '📷', label: 'Scan a receipt', sub: 'Photo → amount, date and category', run: () => { spendTab = 'spend'; go('spend'); const f = $('#spScanFile'); if (f) f.click(); } },
-      { icon: '⇄', label: 'Move money', sub: 'Between buckets or wallets', run: () => { spendTab = 'transfer'; go('spend'); } },
-      { icon: '🔁', label: 'Recurring bill', sub: 'Rent, subscriptions, loans', run: () => { spendTab = 'recurring'; go('spend'); } }
+      { icon: '＋', label: 'Money in', sub: 'You got paid', run: () => go('income') },
+      { icon: '−', label: 'Money out', sub: 'You bought or paid something', run: () => { spendTab = 'spend'; go('spend'); } },
+      { icon: '📷', label: 'Scan a receipt', sub: 'Fills in Money out for you', run: () => { spendTab = 'spend'; go('spend'); const f = $('#spScanFile'); if (f) f.click(); } },
+      { icon: '⇄', label: 'Move money', sub: 'Between buckets or wallets', run: () => { spendTab = 'transfer'; go('spend'); } }
     ]);
   }
   function openMoreSheet() {
@@ -785,7 +903,7 @@
     const status = root.account ? `<div class="sheet-status small muted">Signed in as <b>${esc(root.account.username)}</b>${syncState.status === 'ok' ? ' · <span class="good">✓ Synced</span>' : syncState.status === 'offline' ? ' · Offline' : ''}</div>` : '';
     const sh = sheet('More', [
       { icon: '◎', label: 'Goals & debts', sub: 'When you’ll reach each goal', run: () => go('goals') },
-      { icon: '%', label: 'Split plan', sub: 'Edit sections and percentages', run: () => go('plan') },
+      { icon: '%', label: 'Split plan', sub: 'See and change how paychecks split', run: () => go('plan') },
       { icon: '☰', label: 'History', sub: 'Every income and payment', run: () => go('history') },
       { icon: '⚙', label: 'Settings', sub: 'Account, sync, wallets, theme', run: () => go('settings') }
     ], status + switcher);
@@ -802,7 +920,7 @@
   }
 
   function go(p) {
-    if (page === 'plan' && p !== 'plan') draftPlan = null;
+    if (page === 'plan' && p !== 'plan') { draftPlan = null; planEditing = false; }
     if (p !== 'spend') lastPaymentMsg = null;
     if (p !== 'income') lastIncomeId = null;
     page = p; render(); $('#main').scrollTop = 0;
@@ -831,7 +949,7 @@
   }
 
   function bind() {
-    $$('[data-go]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); go(b.dataset.go); }));
+    $$('[data-go]').forEach((b) => (b.onclick = (e) => { e.preventDefault(); if (b.dataset.mode) spendTab = b.dataset.mode; go(b.dataset.go); }));
     const handlers = { dashboard: bindDashboard, income: bindIncome, spend: bindSpend, plan: bindPlan, goals: bindGoals, reports: bindReports, history: bindHistory, advisor: bindAdvisor, settings: bindSettings };
     handlers[page]();
   }
@@ -857,7 +975,7 @@
     const bindOverrides = () => $$('[data-ov]').forEach((el) => (el.oninput = () => {
       const o = incomeOverrides(); const split = L.splitIncome(amt(), state.sections, o);
       split.sectionAmounts.forEach((sa) => { const b = $(`[data-secamt="${sa.sectionId}"]`); if (b) b.textContent = m(sa.amount); });
-      state.sections.forEach((sec) => { const d = $(`[data-seccats="${sec.id}"]`); if (d) d.textContent = sec.categories.map((c) => `${c.name} ${m(split.allocations.find((x) => x.categoryId === c.id).amount)}`).join(' · '); });
+      split.allocations.forEach((a) => { const d = $(`[data-catamt="${a.categoryId}"]`); if (d) d.textContent = m(a.amount); });
       const total = L.round2(L.sum(Object.values(o))); const t = $('#ovTotal'); if (t) { t.textContent = total + '%'; t.className = Math.abs(total - 100) < 0.001 ? 'good' : 'bad'; }
     }));
     $('#incAmount').oninput = refresh;
@@ -871,13 +989,13 @@
       const v = L.validatePlan(state.sections);
       if (!v.ok) { err.innerHTML = 'Your split plan needs fixing first: ' + esc(v.errors[0]); return; }
       const ov = incomeOverrides();
-      if (ov) { const t = L.round2(L.sum(Object.values(ov))); if (Math.abs(t - 100) > 0.001) { err.textContent = `Section percentages add up to ${t}% — they need to total 100%.`; return; } }
+      if (ov) { const t = L.round2(L.sum(Object.values(ov))); if (Math.abs(t - 100) > 0.001) { err.textContent = `Bucket percentages add up to ${t}% — they need to total 100%.`; return; } }
       const split = L.splitIncome(amount, state.sections, ov);
       const income = { id: L.uid('inc'), createdAt: Date.now(), by: whoAmI(), date: $('#incDate').value || today(), amount, walletId: $('#incWallet').value, original: amt0.original, source: $('#incSource').value.trim(), note: $('#incNote').value.trim(), allocations: split.allocations, advice: '' };
       state.incomes.push(income);
       await persist();
       lastIncomeId = income.id;
-      toast(`${m(amount)} logged and split across ${state.sections.length} sections.`);
+      toast(`${m(amount)} logged and split into your ${state.sections.length} buckets.`);
       if (state.settings.autoAdviceOnIncome) adviseOnIncome(income); else render();
     };
   }
@@ -885,7 +1003,10 @@
   function bindSpend() {
     $$('[data-tab]').forEach((b) => (b.onclick = () => { spendTab = b.dataset.tab; lastPaymentMsg = null; render(); }));
     if (spendTab === 'spend') {
-      const upd = () => { spendForm.last = $('#spCat').value; $('#spStatus').innerHTML = bucketStatus($('#spCat').value); };
+      const upd = () => {
+        spendForm.last = $('#spCat').value; const [sid, cid] = spendForm.last.split('|'); const bb = L.balances(state).get(sid, cid);
+        $('#spAvail').innerHTML = bb ? (bb.available >= 0 ? `<span class="muted">You have <b class="good">${m(bb.available)}</b> left here.</span>` : `<span class="bad">This bucket is already over by ${m(-bb.available)}.</span>`) : '';
+      };
       $('#spCat').onchange = upd; upd();
       const conv = () => { const a = readAmount('#spAmount', '#spCur'); $('#spConv').textContent = a.cur === 'LBP' && a.raw ? `${lbp(a.raw)} = ${m(a.usd)}` : ''; };
       $('#spAmount').oninput = conv; $('#spCur').onchange = conv;
@@ -946,31 +1067,52 @@
 
   function bindPlan() {
     const rerender = () => { const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; };
+    if (!planEditing) {
+      $('#planEdit').onclick = () => { planEditing = true; draftPlan = null; render(); $('#main').scrollTop = 0; };
+      $('#planEx').oninput = (e) => {
+        planExample = Math.max(0, num(e.target.value));
+        state.sections.forEach((sec, si) => {
+          const el = $(`[data-exs="${si}"]`); if (el) el.textContent = m(planExample * sec.percent / 100);
+          sec.categories.forEach((c, ci) => { const x = $(`[data-exc="${si}|${ci}"]`); if (x) x.textContent = m(planExample * sec.percent / 100 * c.percent / 100); });
+        });
+      };
+      return;
+    }
     $$('[data-k]').forEach((el) => {
       const evt = el.type === 'color' || el.tagName === 'SELECT' ? 'change' : 'input';
       el.addEventListener(evt, () => {
-        const s = draftPlan[+el.dataset.s]; const k = el.dataset.k;
-        const target = el.dataset.c != null ? s.categories[+el.dataset.c] : s;
+        const sec = draftPlan[+el.dataset.s]; const k = el.dataset.k;
+        const target = el.dataset.c != null ? sec.categories[+el.dataset.c] : sec;
         target[k] = ['percent', 'target', 'apr', 'minPayment'].includes(k) ? num(el.value) : el.value;
-        if (k === 'color' || k === 'type') rerender();      // a picker changed: safe to redraw
-        else if (k === 'percent') updatePlanTotals();      // typing: only update the totals text
+        if (k === 'color' || k === 'type') rerender();       // a picker changed: safe to redraw
+        else updateLive();                                   // typing: update numbers in place (no jumping cursor)
       });
     });
-    function updatePlanTotals() {
-      const v = L.validatePlan(draftPlan);
-      const t = $('#planTotal'); t.textContent = v.total + '%'; t.className = Math.abs(v.total - 100) < 0.001 ? 'good' : 'bad';
-      $('#planErrors').innerHTML = v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('');
+    function updateLive() {
+      const ex = planExample;
+      const v = L.validatePlan(draftPlan); const st = assignStatus(v.total, 'your paycheck');
+      const ps = $('#planStatus'); ps.textContent = st.text; ps.className = 'assign ' + st.cls;
+      $('#planErrors').innerHTML = v.errors.filter((e) => !/^Buckets add up/.test(e)).map((e) => `<div>• ${esc(e)}</div>`).join('');
       $('#planSave').disabled = !v.ok;
       draftPlan.forEach((sec, si) => {
-        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0));
-        const el = $(`[data-cattotal="${si}"]`); if (!el) return;
-        el.textContent = ct + '%'; el.className = Math.abs(ct - 100) < 0.001 ? 'good' : 'bad';
+        const sp = Number(sec.percent) || 0;
+        const h = $(`[data-sechelp="${si}"]`); if (h) h.innerHTML = `= <b>${m(ex * sp / 100)}</b> of every ${m(ex)} paycheck`;
+        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0)); const cs = assignStatus(ct, esc(sec.name || 'this bucket'));
+        const el = $(`[data-catstatus="${si}"]`); if (el) { el.textContent = cs.text; el.className = 'assign small ' + cs.cls; }
         const ev = $(`[data-even="${si}"]`); if (ev) ev.classList.toggle('hidden', Math.abs(ct - 100) < 0.001);
-        const card = el.closest('.plan-sec'); if (card) card.style.setProperty('--c', sec.color);
+        sec.categories.forEach((c, ci) => {
+          const x = $(`[data-cathelp="${si}|${ci}"]`); const cp = Number(c.percent) || 0;
+          if (x) x.innerHTML = `<b>${m(ex * sp / 100 * cp / 100)}</b><span class="muted small">${pctTxt(sp * cp / 100)} of paycheck</span>`;
+        });
       });
     }
-
-    $('#planAddSec').onclick = () => { draftPlan.push({ id: L.uid('sec'), name: 'New section', type: 'other', percent: 0, color: L.PALETTE[draftPlan.length % L.PALETTE.length], categories: [{ id: L.uid('cat'), name: 'General', percent: 100, target: 0, note: '' }] }); rerender(); };
+    $$('[data-details]').forEach((b) => (b.onclick = () => {
+      const k = b.dataset.details; const row = b.closest('.pc-row');
+      if (planOpen.has(k)) planOpen.delete(k); else planOpen.add(k);
+      row.classList.toggle('open', planOpen.has(k));
+      if (planOpen.has(k)) { const f = $('.pc-details input', row); if (f) setTimeout(() => f.focus(), 50); }
+    }));
+    $('#planAddSec').onclick = () => { draftPlan.push({ id: L.uid('sec'), name: 'New bucket', type: 'other', percent: 0, color: L.PALETTE[draftPlan.length % L.PALETTE.length], categories: [{ id: L.uid('cat'), name: 'General', percent: 100, target: 0, note: '' }] }); rerender(); };
     $$('[data-addcat]').forEach((b) => (b.onclick = () => { draftPlan[+b.dataset.addcat].categories.push({ id: L.uid('cat'), name: 'New category', percent: 0, target: 0, note: '' }); rerender(); }));
     $$('[data-even]').forEach((b) => (b.onclick = () => {
       const cats = draftPlan[+b.dataset.even].categories; const parts = L.distribute(100, cats.map(() => 1));
@@ -978,21 +1120,21 @@
     }));
     $$('[data-delcat]').forEach((b) => (b.onclick = async () => {
       const [si, ci] = b.dataset.delcat.split('|').map(Number); const sec = draftPlan[si];
-      if (sec.categories.length === 1) return toast('A section needs at least one category — delete the section instead.', true);
+      if (sec.categories.length === 1) return toast('A bucket needs at least one category — delete the bucket instead.', true);
       if (hasHistory(sec.id, sec.categories[ci].id) && !(await confirmBox('Delete category?', `"${sec.categories[ci].name}" has history. Its past entries will stay in History but show as a deleted category.`, 'Delete'))) return;
       sec.categories.splice(ci, 1); rerender();
     }));
     $$('[data-delsec]').forEach((b) => (b.onclick = async () => {
       const sec = draftPlan[+b.dataset.delsec];
-      if (!(await confirmBox('Delete section?', `Delete "${sec.name}" and all its categories? Past entries stay in History.`, 'Delete'))) return;
+      if (!(await confirmBox('Delete bucket?', `Delete "${sec.name}" and all its categories? Past entries stay in History.`, 'Delete'))) return;
       draftPlan.splice(+b.dataset.delsec, 1); rerender();
     }));
-    $('#planReset').onclick = () => { draftPlan = null; rerender(); };
+    $('#planCancel').onclick = () => { draftPlan = null; planEditing = false; render(); $('#main').scrollTop = 0; };
     $('#planSave').onclick = async () => {
-      draftPlan.forEach((s) => { s.name = s.name.trim() || 'Untitled'; s.categories.forEach((c) => (c.name = c.name.trim() || 'Untitled')); });
+      draftPlan.forEach((x) => { x.name = x.name.trim() || 'Untitled'; x.categories.forEach((c) => (c.name = c.name.trim() || 'Untitled')); });
       state.sections = JSON.parse(JSON.stringify(draftPlan));
       state.planUpdatedAt = Date.now();
-      await persist(); toast('Plan saved. New incomes will use it.'); draftPlan = null; rerender();
+      await persist(); toast('Plan saved. Your next paycheck will use it.'); draftPlan = null; planEditing = false; render(); $('#main').scrollTop = 0;
     };
   }
 
@@ -1608,6 +1750,7 @@
     sb.addEventListener('touchend', (e) => { if (x0 != null && x0 - e.changedTouches[0].clientX > 60) closeDrawer(); x0 = null; }); })();
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   $('#fab').onclick = openAddSheet;
+  $('#navAdd').onclick = () => { closeDrawer(); openAddSheet(); };
   (async () => {
     loadRoot(await api.load());
     applyTheme();

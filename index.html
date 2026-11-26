@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#000000" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.anthropic.com https://*.workers.dev https://leonmarkarian.github.io; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:;" />
   <title>Leon's Ledger</title>
-  <link rel="stylesheet" href="styles.css?v=1.4.0" />
+  <link rel="stylesheet" href="styles.css?v=1.5.0" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=1.4.0" />
-  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-1.4.0.png" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=1.5.0" />
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-1.5.0.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
@@ -24,14 +24,12 @@
     </div>
     <select id="bookSwitch" class="book-switch hidden" title="Switch budget"></select>
     <nav id="nav">
-      <button data-page="dashboard" class="active"><span>◧</span><em data-short="Home">Dashboard</em></button>
-      <button data-page="income"><span>＋</span><em data-short="Income">Log income</em></button>
-      <button data-page="spend"><span>−</span><em data-short="Spend">Spend / Pay</em></button>
-      <button data-page="plan"><span>%</span><em data-short="Plan">Split plan</em></button>
-      <button data-page="goals"><span>◎</span><em data-short="Goals">Goals & debts</em></button>
-      <button data-page="reports"><span>▦</span><em data-short="Reports">Reports</em></button>
+      <button class="nav-add" id="navAdd"><span>＋</span><em data-short="Add">Add</em></button>
+      <button data-page="dashboard" class="active"><span>◧</span><em data-short="Home">Home</em></button>
+      <button data-page="plan"><span>%</span><em data-short="Plan">Plan</em></button>
+      <button data-page="goals"><span>◎</span><em data-short="Goals">Goals</em></button>
       <button data-page="history"><span>☰</span><em data-short="History">History</em></button>
-      <button data-page="advisor"><span>✦</span><em data-short="AI">AI advisor</em></button>
+      <button data-page="advisor"><span>✦</span><em data-short="AI">Ask AI</em></button>
       <button data-page="settings"><span>⚙</span><em data-short="Settings">Settings</em></button>
     </nav>
     <div class="sync-pill" id="syncPill"></div>
@@ -45,9 +43,9 @@
   <div id="modalRoot"></div>
   <div id="lockRoot"></div>
   <div id="onboardRoot"></div>
-  <script src="web-api.js?v=1.4.0"></script>
-  <script src="logic.js?v=1.4.0"></script>
-  <script src="report.js?v=1.4.0"></script>
-  <script src="app.js?v=1.4.0"></script>
+  <script src="web-api.js?v=1.5.0"></script>
+  <script src="logic.js?v=1.5.0"></script>
+  <script src="report.js?v=1.5.0"></script>
+  <script src="app.js?v=1.5.0"></script>
 </body>
 </html>

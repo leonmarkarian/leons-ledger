@@ -131,7 +131,7 @@
   function validatePlan(sections) {
     const errors = [];
     const total = round2(sum(sections, (s) => Number(s.percent) || 0));
-    if (Math.abs(total - 100) > 0.001) errors.push(`Sections add up to ${total}% — they need to total 100%.`);
+    if (Math.abs(total - 100) > 0.001) errors.push(`Buckets add up to ${total}% — they need to total 100%.`);
     sections.forEach((s) => {
       if (!s.categories.length) { errors.push(`"${s.name}" has no categories.`); return; }
       const t = round2(sum(s.categories, (c) => Number(c.percent) || 0));
