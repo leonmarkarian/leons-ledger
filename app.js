@@ -64,6 +64,10 @@
     await api.save(root);
     if (!(opts && opts.noSync)) scheduleSync();
   }
+  const whoAmI = () => (root && root.account ? root.account.username : undefined);
+  const isShared = () => !!(root && root.meta[root.active] && root.meta[root.active].shared);
+  const nice = (u) => (u ? u.charAt(0).toUpperCase() + u.slice(1) : '');
+  function byTag(x) { return isShared() && x.by ? `by ${nice(x.by)}` : ''; }
   function markDeleted(id) { state.deleted = state.deleted || {}; state.deleted[id] = Date.now(); }
 
   // ---------- server ----------
@@ -104,6 +108,9 @@
         if (JSON.stringify(L.forUpload(merged)) === JSON.stringify(L.forUpload(L.migrate(remote.data)))) { meta.rev = remote.rev; break; }
         try { const r = await call('PUT', '/books/' + meta.remoteId, { baseRev: remote.rev, data: L.forUpload(merged) }); meta.rev = r.rev; break; }
         catch (e) { if (e.status !== 409) throw e; }
+      }
+      if (meta.shared && (!meta.membersAt || Date.now() - meta.membersAt > 5 * 60 * 1000)) {
+        try { const r = await call('GET', '/books/' + meta.remoteId + '/members'); meta.members = r.members.map((x) => x.username); meta.membersAt = Date.now(); changed = true; } catch (_) {}
       }
       await persist({ noSync: true });
       syncState = { status: 'ok', at: Date.now(), msg: '' }; drawSync();
@@ -326,7 +333,7 @@
       const soon = L.upcomingRecurring(state, null, 3);
       return `
         ${Object.keys(root.books).length > 1 ? `<div class="mobile-book"><select id="bookSwitch2">${Object.keys(root.books).map((k) => `<option value="${k}" ${k === root.active ? 'selected' : ''}>${esc(root.meta[k].name || 'Budget')}${root.meta[k].shared ? ' 👥' : ''}</option>`).join('')}</select></div>` : ''}
-        <div class="row between"><div><h1>Dashboard${root.meta[root.active].shared ? ` <span class="tag">👥 ${esc(root.meta[root.active].name)}</span>` : ''}</h1><p class="sub">Where your money is right now.${syncState.status === 'ok' ? ' <span class="good small">✓ Synced</span>' : syncState.status === 'offline' ? ' <span class="muted small">○ Offline</span>' : ''}</p></div>
+        <div class="row between"><div><h1>Dashboard${root.meta[root.active].shared ? ` <span class="tag">👥 ${esc(root.meta[root.active].name)}</span>` : ''}</h1>${root.meta[root.active].shared && root.meta[root.active].members ? `<div class="members">${root.meta[root.active].members.map((u) => `<span class="avatar" title="${esc(u)}">${esc(u.charAt(0).toUpperCase())}</span>`).join('')}<span class="muted small">${root.meta[root.active].members.map(nice).map(esc).join(' & ')}</span></div>` : ''}<p class="sub">Where your money is right now.${syncState.status === 'ok' ? ' <span class="good small">✓ Synced</span>' : syncState.status === 'offline' ? ' <span class="muted small">○ Offline</span>' : ''}</p></div>
           <div class="row"><button class="btn" data-go="spend">− Spend / Pay</button><button class="btn primary" data-go="income">＋ Log income</button></div></div>
         <div class="grid g3">
           <div class="card stat"><div class="label">Available${bizSecs.length ? ' (personal)' : ' across all buckets'}</div><div class="value ${personalAvail < 0 ? 'bad' : ''}" data-count="${personalAvail}">${m(personalAvail)}</div>${bizSecs.length ? `<div class="muted small mt-s">Business kept separate: <b>${m(bizAvail)}</b></div>` : ''}</div>
@@ -344,7 +351,7 @@
           <div class="split-bar">${state.sections.map((s) => `<i style="width:${s.percent}%;background:${s.color}" title="${esc(s.name)} ${s.percent}%"></i>`).join('')}</div>
           <div class="legend">${state.sections.map((s) => `<span><b style="background:${s.color}"></b>${esc(s.name)} ${s.percent}%</span>`).join('')}</div>
         </div>
-        ${latest ? `<div class="card advice-card mt"><div class="row between"><h2>✦ Advisor on your last income (${m(latest.amount)}, ${fmtDate(latest.date)})</h2>
+        ${latest && (latest.advice || aiBusy) ? `<div class="card advice-card mt"><div class="row between"><h2>✦ Advisor on your last income (${m(latest.amount)}, ${fmtDate(latest.date)})</h2>
             <button class="btn sm ghost" data-reask="${latest.id}" ${aiBusy ? 'disabled' : ''}>Refresh advice</button></div>
           <div class="advice md">${aiBusy && !latest.advice ? '<span class="typing">Thinking about your money…</span>' : md(latest.advice || 'No advice yet — click Refresh advice.')}</div>
           ${aiBusy && latest.advice ? '<div class="typing mt-s">Updating…</div>' : ''}</div>` : ''}
@@ -526,6 +533,7 @@
             <div class="grid g2 mt-s">
               <div><b>This budget: ${esc(meta.name || 'My budget')}</b>
                 <p class="muted small" style="margin:4px 0 10px">${meta.remoteId ? (meta.shared ? 'Shared — everyone in it sees the same buckets and entries.' : 'Syncing between your devices.') : 'Only on this device.'}</p>
+                ${meta.shared && meta.members ? `<div class="members mb">${meta.members.map((u) => `<span class="avatar">${esc(u.charAt(0).toUpperCase())}</span>`).join('')}<span class="small">${meta.members.map(nice).map(esc).join(', ')}</span></div>` : ''}
                 ${!meta.remoteId ? '<button class="btn primary" id="syncOn">Turn on sync</button>' : `<button class="btn" id="syncNow">Sync now</button> ${meta.shared || root.active !== 'local' ? '<button class="btn" id="bookInvite">Invite someone</button>' : ''}`}
                 ${root.active !== 'local' ? '<button class="btn ghost danger" id="bookLeave">Leave this budget</button>' : ''}
               </div>
@@ -603,10 +611,10 @@
   function activity() {
     const name = (sid, cid) => { const { section, category } = L.findCategory(state, sid, cid); return section ? `${section.name} → ${category ? category.name : '?'}` : '(deleted category)'; };
     const rows = [];
-    state.incomes.forEach((i) => rows.push({ kind: 'income', id: i.id, at: i.createdAt || 0, date: i.date, amount: i.amount, what: i.source || 'Income', note: i.note, detail: ['Into ' + walletName(i.walletId), i.original ? lbp(i.original.amount) : ''].filter(Boolean).join(' · ') }));
-    state.transactions.forEach((t) => rows.push({ kind: 'spend', id: t.id, at: t.createdAt || 0, date: t.date, amount: -t.amount, what: name(t.sectionId, t.categoryId), note: t.note, detail: [walletName(t.walletId), t.original ? lbp(t.original.amount) : ''].filter(Boolean).join(' · ') }));
-    state.walletTransfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${walletName(t.fromWalletId)}  ⇢  ${walletName(t.toWalletId)}`, note: t.note, detail: 'Wallet move', wallet: true }));
-    state.transfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${name(t.from.sectionId, t.from.categoryId)}  ⇢  ${name(t.to.sectionId, t.to.categoryId)}`, note: t.note, detail: '' }));
+    state.incomes.forEach((i) => rows.push({ kind: 'income', id: i.id, at: i.createdAt || 0, date: i.date, amount: i.amount, what: i.source || 'Income', note: i.note, detail: ['Into ' + walletName(i.walletId), i.original ? lbp(i.original.amount) : '', byTag(i)].filter(Boolean).join(' · ') }));
+    state.transactions.forEach((t) => rows.push({ kind: 'spend', id: t.id, at: t.createdAt || 0, date: t.date, amount: -t.amount, what: name(t.sectionId, t.categoryId), note: t.note, detail: [walletName(t.walletId), t.original ? lbp(t.original.amount) : '', byTag(t)].filter(Boolean).join(' · ') }));
+    state.walletTransfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${walletName(t.fromWalletId)}  ⇢  ${walletName(t.toWalletId)}`, note: t.note, detail: ['Wallet move', byTag(t)].filter(Boolean).join(' · '), wallet: true }));
+    state.transfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${name(t.from.sectionId, t.from.categoryId)}  ⇢  ${name(t.to.sectionId, t.to.categoryId)}`, note: t.note, detail: byTag(t) }));
     return rows.sort((a, b) => b.date.localeCompare(a.date) || b.at - a.at);
   }
 
@@ -854,7 +862,7 @@
       const ov = incomeOverrides();
       if (ov) { const t = L.round2(L.sum(Object.values(ov))); if (Math.abs(t - 100) > 0.001) { err.textContent = `Section percentages add up to ${t}% — they need to total 100%.`; return; } }
       const split = L.splitIncome(amount, state.sections, ov);
-      const income = { id: L.uid('inc'), createdAt: Date.now(), date: $('#incDate').value || today(), amount, walletId: $('#incWallet').value, original: amt0.original, source: $('#incSource').value.trim(), note: $('#incNote').value.trim(), allocations: split.allocations, advice: '' };
+      const income = { id: L.uid('inc'), createdAt: Date.now(), by: whoAmI(), date: $('#incDate').value || today(), amount, walletId: $('#incWallet').value, original: amt0.original, source: $('#incSource').value.trim(), note: $('#incNote').value.trim(), allocations: split.allocations, advice: '' };
       state.incomes.push(income);
       await persist();
       lastIncomeId = income.id;
@@ -878,10 +886,10 @@
         const amount = a.usd;
         if (!(amount > 0)) return toast('Enter an amount greater than zero.', true);
         const [sectionId, categoryId] = $('#spCat').value.split('|');
-        const tx = { id: L.uid('tx'), createdAt: Date.now(), date: $('#spDate').value || today(), sectionId, categoryId, amount, original: a.original, walletId: $('#spWallet').value, method: walletName($('#spWallet').value), note: $('#spNote').value.trim() };
+        const tx = { id: L.uid('tx'), createdAt: Date.now(), by: whoAmI(), date: $('#spDate').value || today(), sectionId, categoryId, amount, original: a.original, walletId: $('#spWallet').value, method: walletName($('#spWallet').value), note: $('#spNote').value.trim() };
         state.transactions.push(tx);
         await persist();
-        lastPaymentMsg = L.paymentMessage(state, tx);
+        lastPaymentMsg = L.paymentMessage(state, tx) + (isShared() ? ' Everyone in this budget can see it now.' : '');
         render();
       };
     } else if (spendTab === 'wallet') {
@@ -889,7 +897,7 @@
         const a = readAmount('#wtAmount', '#wtCur');
         if (!(a.usd > 0)) return toast('Enter an amount greater than zero.', true);
         if ($('#wtFrom').value === $('#wtTo').value) return toast('Pick two different wallets.', true);
-        state.walletTransfers.push({ id: L.uid('wt'), createdAt: Date.now(), date: $('#wtDate').value || today(), fromWalletId: $('#wtFrom').value, toWalletId: $('#wtTo').value, amount: a.usd, original: a.original, note: $('#wtNote').value.trim() });
+        state.walletTransfers.push({ id: L.uid('wt'), createdAt: Date.now(), by: whoAmI(), date: $('#wtDate').value || today(), fromWalletId: $('#wtFrom').value, toWalletId: $('#wtTo').value, amount: a.usd, original: a.original, note: $('#wtNote').value.trim() });
         await persist();
         lastPaymentMsg = `${m(a.usd)} moved from ${walletName($('#wtFrom').value)} to ${walletName($('#wtTo').value)}.`;
         render();
@@ -916,7 +924,7 @@
         if (!(amount > 0)) return toast('Enter an amount greater than zero.', true);
         if ($('#trFrom').value === $('#trTo').value) return toast('Pick two different buckets.', true);
         const [fs, fc] = $('#trFrom').value.split('|'); const [ts, tc] = $('#trTo').value.split('|');
-        state.transfers.push({ id: L.uid('tr'), createdAt: Date.now(), date: $('#trDate').value || today(), from: { sectionId: fs, categoryId: fc }, to: { sectionId: ts, categoryId: tc }, amount, note: $('#trNote').value.trim() });
+        state.transfers.push({ id: L.uid('tr'), createdAt: Date.now(), by: whoAmI(), date: $('#trDate').value || today(), from: { sectionId: fs, categoryId: fc }, to: { sectionId: ts, categoryId: tc }, amount, note: $('#trNote').value.trim() });
         await persist();
         const a = L.findCategory(state, fs, fc).category.name, b = L.findCategory(state, ts, tc).category.name;
         lastPaymentMsg = `${m(amount)} moved from ${a} to ${b}.`;
