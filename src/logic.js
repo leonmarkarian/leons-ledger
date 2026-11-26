@@ -490,7 +490,34 @@
   const sameBudget = (x, y) => JSON.stringify(forUpload(x)) === JSON.stringify(forUpload(y));
   const isEmptyBudget = (st) => !st || (!(st.incomes || []).length && !(st.transactions || []).length);
 
+
+  // ---------- Safe mini-markdown for AI text (bold, italics, lists, headings, code) ----------
+  function mdToHtml(text) {
+    const e = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const inline = (t) => e(t)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
+    const lines = String(text || '').replace(/\r/g, '').split('\n');
+    let html = '', list = null, para = [];
+    const flushPara = () => { if (para.length) { html += '<p>' + para.map(inline).join('<br>') + '</p>'; para = []; } };
+    const closeList = () => { if (list) { html += `</${list}>`; list = null; } };
+    lines.forEach((ln) => {
+      const t = ln.trim();
+      let mm;
+      if (!t) { flushPara(); closeList(); return; }
+      if ((mm = t.match(/^#{1,4}\s+(.*)$/))) { flushPara(); closeList(); html += `<h4>${inline(mm[1])}</h4>`; return; }
+      if ((mm = t.match(/^[-*•]\s+(.*)$/))) { flushPara(); if (list !== 'ul') { closeList(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(mm[1])}</li>`; return; }
+      if ((mm = t.match(/^\d+[.)]\s+(.*)$/))) { flushPara(); if (list !== 'ol') { closeList(); html += '<ol>'; list = 'ol'; } html += `<li>${inline(mm[1])}</li>`; return; }
+      closeList(); para.push(t);
+    });
+    flushPara(); closeList();
+    return html;
+  }
+
   return {
+    mdToHtml,
     mergeStates, forUpload, sameBudget, isEmptyBudget, DEVICE_KEYS,
     monthKey, localToday, addMonths, monthLabel, toUSD, walletBalances, monthlySeries, spendingByCategory, avgMonthlyIncome,
     goalTimelines, debtPlan, currentDebts, dueRecurring, upcomingRecurring, recurringTx, toCSV,

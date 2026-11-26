@@ -309,6 +309,9 @@
   const shortMoney = (v) => { const a = Math.abs(v), sg = v < 0 ? '-' : ''; const sy = state.settings.currencySymbol || '$';
     return a >= 1e6 ? `${sg}${sy}${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${sg}${sy}${(a / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k` : `${sg}${sy}${Math.round(a)}`; };
 
+  const md = (t) => L.mdToHtml(t);
+  const avatar = () => `<div class="av">${$('.brand .logo') ? $('.brand .logo').innerHTML : ''}</div>`;
+
   // ---------------- Pages ----------------
   const pages = {
     dashboard() {
@@ -343,7 +346,7 @@
         </div>
         ${latest ? `<div class="card advice-card mt"><div class="row between"><h2>✦ Advisor on your last income (${m(latest.amount)}, ${fmtDate(latest.date)})</h2>
             <button class="btn sm ghost" data-reask="${latest.id}" ${aiBusy ? 'disabled' : ''}>Refresh advice</button></div>
-          <div class="advice">${aiBusy && !latest.advice ? '<span class="typing">Thinking about your money…</span>' : esc(latest.advice || 'No advice yet — click Refresh advice.')}</div>
+          <div class="advice md">${aiBusy && !latest.advice ? '<span class="typing">Thinking about your money…</span>' : md(latest.advice || 'No advice yet — click Refresh advice.')}</div>
           ${aiBusy && latest.advice ? '<div class="typing mt-s">Updating…</div>' : ''}</div>` : ''}
         <div class="grid g2 mt">${b.sections.map(sectionCard).join('')}</div>
         <div class="card mt"><div class="row between"><h2>Recent activity</h2><button class="btn sm ghost" data-go="history">See all</button></div>
@@ -485,7 +488,7 @@
           <div class="card"><h2>By type</h2>${Object.keys(byType).length ? Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="hbar"><div class="row between small"><span>${L.SECTION_TYPES[k] ? L.SECTION_TYPES[k].label : k}</span><b>${m(v)} <span class="muted">${totOut ? Math.round(v / totOut * 100) : 0}%</span></b></div><div class="bar"><i style="width:${totOut ? v / totOut * 100 : 0}%"></i></div></div>`).join('') : '<div class="empty">Nothing yet.</div>'}</div>
         </div>
         <div class="card advice-card mt"><div class="row between"><h2>✦ Monthly AI report</h2><button class="btn sm primary" id="rpAi" ${aiBusy ? 'disabled' : ''}>${aiBusy ? 'Writing…' : `Write report for ${L.monthLabel(lastMonth)}`}</button></div>
-          ${reports.length ? reports.slice(0, 6).map((r) => `<details ${r === reports[0] ? 'open' : ''}><summary><b>${L.monthLabel(r.month)}</b> <span class="muted small">written ${fmtDate(r.date)}</span></summary><div class="advice mt-s">${esc(r.text)}</div></details>`).join('') : '<p class="muted small">Get a short review of last month: what went well, what didn’t, and three things to change.</p>'}
+          ${reports.length ? reports.slice(0, 6).map((r) => `<details ${r === reports[0] ? 'open' : ''}><summary><b>${L.monthLabel(r.month)}</b> <span class="muted small">written ${fmtDate(r.date)}</span></summary><div class="advice md mt-s">${md(r.text)}</div></details>`).join('') : '<p class="muted small">Get a short review of last month: what went well, what didn’t, and three things to change.</p>'}
         </div>`;
     },
 
@@ -502,11 +505,11 @@
       return `<h1>AI advisor</h1><p class="sub">Ask anything about your money. The advisor sees your plan, balances, debts, goals and recent activity.</p>
         ${noKey ? `<div class="card mt" style="border-color:rgba(242,180,91,.4)"><b class="warn">AI is off.</b> <span class="muted">${s.aiEnabled ? 'Connect to the internet to use the AI advisor.' : 'Turn on the AI advisor in Settings.'} Until then you'll get offline tips.</span> <button class="btn sm" data-go="settings">Open Settings</button></div>` : ''}
         <div class="card mt"><div class="chat" id="chat">
-          ${state.chat.length ? state.chat.map((c) => `<div class="msg ${c.role}">${esc(c.content)}</div>`).join('') : `<div class="empty">Try: “How long until I can pay off my debts?” · “Should I move more to my wedding fund?” · “Review my spending this month.”</div>`}
-          ${aiBusy ? '<div class="msg assistant typing">Thinking…</div>' : ''}
+          ${state.chat.length ? state.chat.map((c) => c.role === 'user' ? `<div class="msg user">${esc(c.content)}</div>` : `<div class="msg assistant">${avatar()}<div class="md">${md(c.content)}</div></div>`).join('') : `<div class="empty">Try: “How long until I can pay off my debts?” · “Should I move more to my wedding fund?” · “Review my spending this month.”</div>`}
+          ${aiBusy ? `<div class="msg assistant">${avatar()}<div class="typing">Thinking…</div></div>` : ''}
         </div>
-        <div class="row mt"><input id="chatInput" style="flex:1" placeholder="Ask the advisor…" ${aiBusy ? 'disabled' : ''}><button class="btn primary" id="chatSend" ${aiBusy ? 'disabled' : ''}>Send</button>
-          ${state.chat.length ? '<button class="btn ghost" id="chatClear">Clear</button>' : ''}</div></div>`;
+        <div class="chat-row mt"><input id="chatInput" placeholder="Ask the advisor…" ${aiBusy ? 'disabled' : ''}><button class="btn primary" id="chatSend" ${aiBusy ? 'disabled' : ''}>Send</button>
+          ${state.chat.length ? '<button class="btn ghost" id="chatClear" title="Clear chat">Clear</button>' : ''}</div></div>`;
     },
 
     settings() {
@@ -534,7 +537,16 @@
             </div>
             ${Object.keys(root.books).length > 1 ? `<div class="mt-s small muted">Switch between budgets from the menu at the top of the sidebar.</div>` : ''}`}
         </div>
-        <div class="grid g2 mt">
+        <div class="settings-cols">
+          <div class="card"><h2>General</h2>
+              <div class="form-grid">
+                <label class="f full">Your name (the advisor uses it)<input id="sName" value="${esc(s.userName || '')}" placeholder="Optional"></label>
+                <label class="f">Currency code<input id="sCur" value="${esc(s.currency)}"></label>
+                <label class="f">Currency symbol<input id="sSym" value="${esc(s.currencySymbol)}"></label>
+                <label class="f full">Lebanese lira rate (LBP per $1)<input id="sRate" type="text" inputmode="numeric" autocomplete="off" value="${s.lbpRate}"></label>
+              </div>
+              <button class="btn primary mt" id="sSave">Save settings</button>
+          </div>
           <div class="card"><h2>AI advisor</h2>
             <label class="row small"><input type="checkbox" id="sAi" ${s.aiEnabled ? 'checked' : ''}> Enable AI advisor</label>
             <label class="row small mt-s"><input type="checkbox" id="sAuto" ${s.autoAdviceOnIncome ? 'checked' : ''}> Give advice automatically every time I log income</label>
@@ -543,40 +555,30 @@
             <label class="f mt">Anthropic API key (optional)<input id="sKey" type="password" value="${esc(s.apiKey)}" placeholder="Leave empty to use the built-in AI"></label>
             <div class="small muted mt-s">With your own key there's no daily limit; you pay Anthropic directly. It stays on this device.</div></details>
             <label class="f mt">Model<input id="sModel" value="${esc(s.model)}"></label>
-            <label class="f mt">About me (the advisor uses this for context)<textarea id="sAbout" rows="5">${esc(s.aboutMe)}</textarea></label>
+            <label class="f mt">About me (the advisor uses this for context)<textarea id="sAbout" rows="4" placeholder="e.g. saving for a wedding next summer, paying off a car loan">${esc(s.aboutMe)}</textarea></label>
+            <p class="small muted" style="margin-bottom:0">AI settings are saved with <b>Save settings</b>.</p>
           </div>
-          <div>
-            <div class="card"><h2>General</h2>
-              <div class="form-grid">
-                <label class="f full">Your name (the advisor uses it)<input id="sName" value="${esc(s.userName || '')}" placeholder="Optional"></label>
-                <label class="f">Currency code<input id="sCur" value="${esc(s.currency)}"></label>
-                <label class="f">Currency symbol<input id="sSym" value="${esc(s.currencySymbol)}"></label>
-                <label class="f full">Lebanese lira rate (LBP per $1)<input id="sRate" type="text" inputmode="numeric" autocomplete="off" min="1" step="1" value="${s.lbpRate}"></label>
-              </div>
-              <button class="btn primary mt" id="sSave">Save settings</button>
-            </div>
-            <div class="card mt"><h2>Theme</h2>
+            <div class="card"><h2>Theme</h2>
               <div class="themes">${[['black', 'Black'], ['navy', 'Navy'], ['pink', 'Pink'], ['light', 'Light']].map(([k, l]) => `<button class="theme-swatch ${s.theme === k ? 'active' : ''}" data-theme-pick="${k}"><span class="sw sw-${k}"></span>${l}</button>`).join('')}</div>
             </div>
-            <div class="card mt"><h2>Wallets</h2>
+            <div class="card"><h2>Wallets</h2>
               <p class="muted small" style="margin-top:0">Where your money physically is — cash, cards, bank. Starting balance = what was in it before you started using the app.</p>
               ${s.wallets.map((w, i) => `<div class="wallet-edit"><input value="${esc(w.name)}" data-wname="${i}" placeholder="Wallet name"><div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" step="0.01" value="${w.opening || 0}" data-wopen="${i}" title="Starting balance"></div><button class="icon-btn" data-wdel="${i}" title="Delete wallet">✕</button></div>`).join('')}
               <div class="row mt-s"><button class="btn sm" id="wAdd">＋ Add wallet</button><button class="btn sm primary" id="wSave">Save wallets</button></div>
             </div>
-            <div class="card mt"><h2>App lock</h2>
+            <div class="card"><h2>App lock</h2>
               <p class="muted small" style="margin-top:0">${s.pinHash ? 'A PIN is required when the app opens.' : 'Ask for a 4-digit PIN every time the app opens.'}</p>
               <div class="row">${s.pinHash ? '<button class="btn" id="pinChange">Change PIN</button><button class="btn ghost danger" id="pinOff">Turn off</button>' : '<button class="btn" id="pinOn">Set a PIN</button>'}</div>
             </div>
-            <div class="card mt"><h2>Backup</h2>
-              <p class="muted small" style="margin-top:0">Your data is stored only on this device and survives updates. Export a backup now and then anyway.</p>
+            <div class="card"><h2>Backup</h2>
+              <p class="muted small" style="margin-top:0">${root.account ? 'Your budget is saved on this device and synced to your account.' : 'Your data is stored only on this device and survives updates.'} Export a backup now and then anyway.</p>
               <div class="row wrap"><button class="btn" id="bExport">Export backup</button><button class="btn" id="bImport">Import backup</button><button class="btn ghost" id="bFolder">Open data folder</button></div>
               <button class="btn danger ghost mt" id="bReset">Reset everything…</button>
             </div>
-            <div class="card mt"><h2>Updates</h2>
+            <div class="card"><h2>Updates</h2>
               <p class="muted small" style="margin-top:0" id="updText">Version <span id="verText"></span>. ${api.platform === 'web' ? 'The app updates itself automatically whenever you open it online.' : 'The app checks for updates automatically on launch.'}</p>
               <button class="btn" id="uCheck">Check for updates</button>
             </div>
-          </div>
         </div>`;
     }
   };
@@ -643,7 +645,7 @@
     const inc = state.incomes.find((i) => i.id === lastIncomeId);
     if (!inc) return '';
     return `<div class="card advice-card mt"><h2>✦ Advisor's take on ${m(inc.amount)}</h2>
-      <div class="advice">${aiBusy && !inc.advice ? '<span class="typing">Thinking about this income…</span>' : esc(inc.advice || '')}</div></div>`;
+      <div class="advice md">${aiBusy && !inc.advice ? '<span class="typing">Thinking about this income…</span>' : md(inc.advice || '')}</div></div>`;
   }
 
   function spendForm() {
@@ -1338,11 +1340,23 @@
 
   // ---------------- Boot ----------------
   $$('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.page)));
-  $$('[data-mtab]').forEach((b) => (b.onclick = () => (b.dataset.mtab === 'more' ? openMoreSheet() : go(b.dataset.mtab))));
+  const isPhone = () => matchMedia('(max-width: 760px)').matches;
+  const closeDrawer = () => document.body.classList.remove('sb-open');
+  $('#sbToggle').onclick = () => {
+    if (isPhone()) document.body.classList.toggle('sb-open');
+    else { document.body.classList.toggle('sb-collapsed'); root.device.sbCollapsed = document.body.classList.contains('sb-collapsed'); api.save(root); }
+  };
+  $('#sbBackdrop').onclick = closeDrawer;
+  $$('#nav button').forEach((b) => { b.title = b.textContent.trim(); b.addEventListener('click', () => { if (isPhone()) closeDrawer(); }); });
+  (() => { let x0 = null; const sb = $('.sidebar');
+    sb.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+    sb.addEventListener('touchend', (e) => { if (x0 != null && x0 - e.changedTouches[0].clientX > 60) closeDrawer(); x0 = null; }); })();
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   $('#fab').onclick = openAddSheet;
   (async () => {
     loadRoot(await api.load());
     applyTheme();
+    document.body.classList.toggle('sb-collapsed', !!root.device.sbCollapsed);
     if (state.settings.pinHash) await lockScreen();
     await processRecurring();
     await persist();
@@ -1351,7 +1365,7 @@
     render();
     animateEntrance();
     setInterval(async () => { if (await processRecurring()) render(); }, 30 * 60 * 1000);
-    $('#bookSwitch').onchange = (e) => switchBook(e.target.value);
+    $('#bookSwitch').onchange = (e) => { closeDrawer(); switchBook(e.target.value); };
     await discover(); drawSync();
     if (page === 'settings') render();
     syncActive();
