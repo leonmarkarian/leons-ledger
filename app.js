@@ -516,7 +516,8 @@
           ${aiBusy ? `<div class="msg assistant">${avatar()}<div class="typing">Thinking…</div></div>` : ''}
         </div>
         <div class="chat-row mt"><input id="chatInput" placeholder="Ask the advisor…" ${aiBusy ? 'disabled' : ''}><button class="btn primary" id="chatSend" ${aiBusy ? 'disabled' : ''}>Send</button>
-          ${state.chat.length ? '<button class="btn ghost" id="chatClear" title="Clear chat">Clear</button>' : ''}</div></div>`;
+          ${state.chat.length ? '<button class="btn ghost" id="chatClear" title="Clear chat">Clear</button>' : ''}</div>
+          <p class="muted small" style="margin:10px 0 0">AI can make mistakes. Answers are general guidance, not professional financial advice.</p></div>`;
     },
 
     settings() {
@@ -528,7 +529,7 @@
           ${!apiBase ? '<p class="muted small">The online service isn’t reachable right now. Check your internet connection.</p>' : !acc ? `
             <p class="muted small">Create a free account to sync this budget between your phone and computer, share a budget with someone, and get more daily AI requests.</p>
             <div class="form-grid acc-form"><label class="f">Username<input id="accUser" autocomplete="username" placeholder="e.g. leon"></label><label class="f">Password<input id="accPass" type="password" autocomplete="current-password" placeholder="8+ characters"></label></div>
-            <div class="row mt-s"><button class="btn primary" id="accLogin">Log in</button><button class="btn" id="accSignup">Create account</button></div>
+            <div class="row mt-s wrap"><button class="btn primary" id="accLogin">Log in</button><button class="btn" id="accSignup">Create account</button><a href="#" id="accForgot" class="small">Forgot password?</a></div>
             <p class="muted small">Your budget is stored on the server so your devices can sync. Your PIN and any personal API key never leave this device.</p>` : `
             <div class="grid g2 mt-s">
               <div><b>This budget: ${esc(meta.name || 'My budget')}</b>
@@ -543,7 +544,8 @@
                 ${remoteBooks ? remoteBooks.filter((b) => !Object.values(root.meta).some((mm) => mm.remoteId === b.id)).map((b) => `<div class="row between mt-s small"><span>${esc(b.name)} <span class="muted">${b.shared ? b.members + ' people' : 'your budget'}</span></span><button class="btn sm" data-getbook="${b.id}">Use on this device</button></div>`).join('') : ''}
               </div>
             </div>
-            ${Object.keys(root.books).length > 1 ? `<div class="mt-s small muted">Switch between budgets from the menu at the top of the sidebar.</div>` : ''}`}
+            ${Object.keys(root.books).length > 1 ? `<div class="mt-s small muted">Switch between budgets from the menu at the top of the sidebar.</div>` : ''}
+            ${acc.hasRecovery === false ? `<div class="warn-box mt"><b>⚠ No recovery code yet.</b> If you forget your password you'd lose access. <button class="btn sm" id="secRecovery2">Create one now</button></div>` : ''}`}
         </div>
         <div class="settings-cols">
           <div class="card"><h2>General</h2>
@@ -582,6 +584,15 @@
               <p class="muted small" style="margin-top:0">${root.account ? 'Your budget is saved on this device and synced to your account.' : 'Your data is stored only on this device and survives updates.'} Export a backup now and then anyway.</p>
               <div class="row wrap"><button class="btn" id="bExport">Export backup</button><button class="btn" id="bImport">Import backup</button><button class="btn ghost" id="bFolder">Open data folder</button></div>
               <button class="btn danger ghost mt" id="bReset">Reset everything…</button>
+            </div>
+            ${acc ? `<div class="card"><h2>Account security</h2>
+              <p class="muted small" style="margin-top:0">Signed in as <b>${esc(acc.username)}</b>.</p>
+              <div class="row wrap"><button class="btn" id="secPass">Change password</button><button class="btn" id="secRecovery">New recovery code</button></div>
+              <button class="btn ghost danger mt" id="secDelete">Delete my account…</button>
+            </div>` : ''}
+            <div class="card"><h2>About & legal</h2>
+              <p class="muted small" style="margin-top:0">Leon's Ledger v<span class="verText2"></span>. AI answers are general guidance, not professional financial advice.</p>
+              <div class="row wrap"><a class="btn" href="${PRIVACY_URL}" target="_blank" rel="noopener">Privacy Policy</a><a class="btn" href="${TERMS_URL}" target="_blank" rel="noopener">Terms of Use</a><a class="btn ghost" href="mailto:${CONTACT}">Contact</a></div>
             </div>
             <div class="card"><h2>Updates</h2>
               <p class="muted small" style="margin-top:0" id="updText">Version <span id="verText"></span>. ${api.platform === 'web' ? 'The app updates itself automatically whenever you open it online.' : 'The app checks for updates automatically on launch.'}</p>
@@ -1053,7 +1064,8 @@
   }
 
   function bindSettings() {
-    api.version().then((v) => { if ($('#verText')) $('#verText').textContent = v; });
+    api.version().then((v) => { if ($('#verText')) $('#verText').textContent = v; $$('.verText2').forEach((x) => { x.textContent = v; }); });
+    if ($('#secRecovery2')) $('#secRecovery2').onclick = () => $('#secRecovery') && $('#secRecovery').click();
     $('#sSave').onclick = async () => {
       const s = state.settings;
       s.aiEnabled = $('#sAi').checked; s.autoAdviceOnIncome = $('#sAuto').checked;
@@ -1130,9 +1142,81 @@
     if (u.status === 'none') setTimeout(() => pill.classList.add('hidden'), 10);
   });
 
+  // ---------------- Legal & recovery ----------------
+  const SITE = location.protocol === 'file:' ? 'https://leonmarkarian.github.io/leons-ledger/' : './';
+  const PRIVACY_URL = SITE + 'privacy.html', TERMS_URL = SITE + 'terms.html';
+  const CONTACT = 'leonmarkarian99@gmail.com';
+
+  function showRecoveryCode(code, onDone) {
+    modal(`<h2>Save your recovery code</h2>
+      <p class="muted">If you ever forget your password, this code is the only way back into your account. We can't see or reset it for you.</p>
+      <div class="invite-code recovery-code">${esc(code)}</div>
+      <div class="row wrap"><button class="btn" data-copy>Copy</button><button class="btn" data-dl>Download as a file</button></div>
+      <label class="row small mt"><input type="checkbox" data-ok-check> I've saved my recovery code somewhere safe</label>
+      <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn primary" data-ok disabled>Done</button></div>`, (el, close) => {
+      $('[data-copy]', el).onclick = async () => { try { await navigator.clipboard.writeText(code); toast('Copied.'); } catch (_) { toast('Select the code and copy it.', true); } };
+      $('[data-dl]', el).onclick = () => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([`Leon's Ledger recovery code\nUsername: ${root.account ? root.account.username : ''}\nRecovery code: ${code}\n\nKeep this private. You need it to reset your password.\n`], { type: 'text/plain' }));
+        a.download = 'leons-ledger-recovery-code.txt'; document.body.appendChild(a); a.click(); a.remove();
+      };
+      $('[data-ok-check]', el).onchange = (e) => { $('[data-ok]', el).disabled = !e.target.checked; };
+      $('[data-ok]', el).onclick = () => { close(); if (onDone) onDone(); };
+      $('.modal-bg').onmousedown = null;
+    });
+  }
+
+  function forgotPasswordDialog(prefill, onSuccess) {
+    modal(`<h2>Reset your password</h2>
+      <p class="muted small">Enter your username, the recovery code you saved when you created your account, and a new password.</p>
+      <label class="f">Username<input id="fpUser" value="${esc(prefill || '')}" autocomplete="username"></label>
+      <label class="f mt-s">Recovery code<input id="fpCode" placeholder="XXXX-XXXX-XXXX-XXXX" style="text-transform:uppercase" autocomplete="off"></label>
+      <label class="f mt-s">New password<input id="fpPass" type="password" placeholder="8+ characters" autocomplete="new-password"></label>
+      <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>Reset password</button></div>`, (el, close) => {
+      $('[data-x]', el).onclick = close;
+      $('[data-ok]', el).onclick = async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          const r = await call('POST', '/auth/reset', { username: $('#fpUser', el).value.trim(), recoveryCode: $('#fpCode', el).value, newPassword: $('#fpPass', el).value });
+          root.account = { token: r.token, username: r.user.username, id: r.user.id }; await api.save(root);
+          close(); toast('Password changed — you’re logged in.');
+          showRecoveryCode(r.recoveryCode, onSuccess);   // the old code was used up, here's the new one
+        } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+      };
+    });
+  }
+
+  function passwordPrompt(title, text, okLabel, danger, extraHtml) {
+    return new Promise((resolve) => {
+      modal(`<h2>${esc(title)}</h2><p class="muted">${text}</p>
+        <label class="f">Password<input id="ppPass" type="password" autocomplete="current-password"></label>${extraHtml || ''}
+        <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" data-x>Cancel</button><button class="btn ${danger ? 'danger-solid' : 'primary'}" data-ok>${esc(okLabel)}</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = () => { close(); resolve(null); };
+        $('[data-ok]', el).onclick = () => { const v = { password: $('#ppPass', el).value, extra: $('[data-extra]', el) ? $('[data-extra]', el).checked : false }; close(); resolve(v); };
+        setTimeout(() => $('#ppPass', el).focus(), 50);
+      });
+    });
+  }
+
+  async function deleteAccountFlow() {
+    const r = await passwordPrompt('Delete your account?', 'This permanently deletes your account and your synced budget from our server. Shared budgets stay for the other members. <b>This can’t be undone.</b>', 'Delete account', true,
+      '<label class="row small mt"><input type="checkbox" data-extra> Also erase all budgets on this device</label>');
+    if (!r) return;
+    try {
+      await call('POST', '/auth/delete', { password: r.password });
+      root.account = null; remoteBooks = null;
+      Object.keys(root.books).forEach((k) => { if (k !== 'local') { delete root.books[k]; delete root.meta[k]; } });
+      delete root.meta.local.remoteId; delete root.meta.local.rev;
+      if (r.extra) { root.books.local = L.defaultState(); root.device.onboarded = false; }
+      useBook('local'); await api.save(root); syncState.status = 'off'; drawSync();
+      toast('Your account was deleted.');
+      if (r.extra) location.reload(); else go('settings');
+    } catch (e) { toast(e.message, true); }
+  }
+
   // ---------------- Account, sync & shared budgets ----------------
   async function refreshRemoteBooks() {
-    try { const r = await call('GET', '/me'); remoteBooks = r.books; } catch (_) { remoteBooks = null; }
+    try { const r = await call('GET', '/me'); remoteBooks = r.books; if (root.account) { root.account.hasRecovery = !!r.user.hasRecovery; await api.save(root); } } catch (_) { remoteBooks = null; }
   }
   async function linkRemote(bookInfo, opts) {
     // bring a server budget onto this device
@@ -1153,6 +1237,7 @@
         const r = await call('POST', path, { username, password });
         root.account = { token: r.token, username: r.user.username, id: r.user.id };
         await api.save(root);
+        if (r.recoveryCode) await new Promise((res) => showRecoveryCode(r.recoveryCode, res));
         await refreshRemoteBooks();
         // a personal budget already on the server (logging in on a second device)?
         const mine = (remoteBooks || []).find((b) => !b.shared && b.role === 'owner');
@@ -1164,6 +1249,26 @@
       } catch (e) { toast(e.message, true); busy(btn, false); }
     };
     if ($('#accLogin')) $('#accLogin').onclick = (e) => doAuth('/auth/login', e.currentTarget);
+    if ($('#accForgot')) $('#accForgot').onclick = (e) => { e.preventDefault(); forgotPasswordDialog($('#accUser').value.trim(), () => render()); };
+    if ($('#secPass')) $('#secPass').onclick = () => {
+      modal(`<h2>Change password</h2><label class="f">Current password<input id="cpOld" type="password" autocomplete="current-password"></label>
+        <label class="f mt-s">New password<input id="cpNew" type="password" placeholder="8+ characters" autocomplete="new-password"></label>
+        <p class="muted small">Your other devices will be logged out.</p>
+        <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>Change</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('[data-ok]', el).onclick = async () => {
+          try { await call('POST', '/auth/password', { oldPassword: $('#cpOld', el).value, newPassword: $('#cpNew', el).value }); close(); toast('Password changed.'); }
+          catch (e) { toast(e.message, true); }
+        };
+      });
+    };
+    if ($('#secRecovery')) $('#secRecovery').onclick = async () => {
+      const r = await passwordPrompt('New recovery code', 'Enter your password to create a new recovery code. Your old code will stop working.', 'Create code');
+      if (!r) return;
+      try { const x = await call('POST', '/auth/recovery', { password: r.password }); root.account.hasRecovery = true; await api.save(root); showRecoveryCode(x.recoveryCode, () => render()); }
+      catch (e) { toast(e.message, true); }
+    };
+    if ($('#secDelete')) $('#secDelete').onclick = deleteAccountFlow;
     if ($('#accSignup')) $('#accSignup').onclick = (e) => doAuth('/auth/signup', e.currentTarget);
     if ($('#accOut')) $('#accOut').onclick = async (e) => {
       e.preventDefault();
@@ -1319,6 +1424,148 @@
     return changed;
   }
 
+  // ---------------- First launch: welcome & setup ----------------
+  const CURRENCIES = [['USD', '$'], ['EUR', '€'], ['GBP', '£'], ['AED', 'AED '], ['SAR', 'SAR '], ['CAD', 'C$'], ['AUD', 'A$']];
+  const WALLET_CHOICES = ['Cash', 'Bank card', 'Whish Money', 'OMT Pay', 'Savings account', 'Credit card'];
+
+  function needsOnboarding() {
+    if (root.device.onboarded) return false;
+    const hasData = Object.values(root.books).some((b) => (b.incomes || []).length || (b.transactions || []).length) || !!root.account;
+    if (hasData) { root.device.onboarded = true; api.save(root); return false; }
+    return true;
+  }
+
+  function onboarding() {
+    return new Promise((resolve) => {
+      const host = $('#onboardRoot');
+      const ob = { step: 0, name: '', cur: 'USD', lira: false, rate: 89500, wallets: ['Cash', 'Bank card'], tpl: 'balanced', mode: 'new' };
+      const finish = async (opts) => {
+        if (!(opts && opts.keepBook)) {
+          const st = L.defaultState();
+          st.settings.userName = ob.name.trim();
+          const c = CURRENCIES.find((x) => x[0] === ob.cur) || CURRENCIES[0];
+          st.settings.currency = c[0]; st.settings.currencySymbol = c[1];
+          st.settings.lbpRate = ob.lira ? Math.max(1, num(ob.rate) || 89500) : 89500;
+          st.settings.wallets = (ob.wallets.length ? ob.wallets : ['Cash']).map((n, i) => ({ id: 'w_' + i + '_' + n.toLowerCase().replace(/[^a-z0-9]+/g, ''), name: n, opening: 0 }));
+          st.sections = L.templateSections(ob.tpl);
+          st.planUpdatedAt = st.settingsUpdatedAt = Date.now();
+          L.DEVICE_KEYS.forEach((k) => { st.settings[k] = root.device[k]; });
+          root.books.local = st; useBook('local');
+        }
+        root.device.onboarded = true; await api.save(root);
+        if (opts && opts.keepAfter) { applyTheme(); render(); resolve(null); return; }
+        host.classList.add('closing');
+        setTimeout(() => { host.innerHTML = ''; host.classList.remove('closing'); resolve(opts && opts.goto); }, 300);
+      };
+      const STEPS = ['welcome', 'you', 'wallets', 'plan', 'account', 'done'];
+      const draw = () => {
+        const key = ob.mode === 'login' ? 'login' : STEPS[ob.step];
+        const dots = ob.mode === 'login' ? '' : `<div class="ob-dots">${STEPS.slice(1, 5).map((_, i) => `<i class="${i + 1 <= ob.step ? 'on' : ''}"></i>`).join('')}</div>`;
+        const logoHtml = $('.brand .logo').innerHTML;
+        const body = {
+          welcome: () => `<div class="ob-logo">${logoHtml}</div>
+            <h1>Welcome to Leon's Ledger</h1>
+            <p class="muted">Split every paycheck automatically, see where your money goes, and get advice from a built-in AI.</p>
+            <div class="ob-feats">
+              <div><span>%</span><b>Auto-split income</b><small>Every payment divided into your buckets.</small></div>
+              <div><span>✦</span><b>AI advisor</b><small>Advice based on your real numbers.</small></div>
+              <div><span>👥</span><b>Budget together</b><small>Share a budget with a partner or team.</small></div>
+            </div>
+            <button class="btn primary ob-main" data-next>Get started</button>
+            <button class="btn ghost ob-main" data-login>I already have an account</button>
+            <p class="muted small ob-legal">By continuing you agree to the <a href="${TERMS_URL}" target="_blank" rel="noopener">Terms</a> and <a href="${PRIVACY_URL}" target="_blank" rel="noopener">Privacy Policy</a>.</p>`,
+          you: () => `<h2>About you</h2><p class="muted">This makes the app and its AI advice feel like yours.</p>
+            <label class="f">Your first name<input id="obName" value="${esc(ob.name)}" placeholder="e.g. Leon" autocomplete="given-name"></label>
+            <label class="f mt">Main currency<select id="obCur">${CURRENCIES.map(([c]) => `<option ${c === ob.cur ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+            <label class="row small mt"><input type="checkbox" id="obLira" ${ob.lira ? 'checked' : ''}> I also pay in Lebanese lira (LBP)</label>
+            <label class="f mt-s ${ob.lira ? '' : 'hidden'}" id="obRateBox">LBP per 1 ${esc(ob.cur)}<input id="obRate" inputmode="numeric" value="${ob.rate}"></label>`,
+          wallets: () => `<h2>Where's your money?</h2><p class="muted">Pick the places you pay from. You can add or rename them later.</p>
+            <div class="ob-chips">${[...new Set([...WALLET_CHOICES, ...ob.wallets])].map((w) => `<button class="ob-chip ${ob.wallets.includes(w) ? 'on' : ''}" data-w="${esc(w)}">${ob.wallets.includes(w) ? '✓ ' : ''}${esc(w)}</button>`).join('')}</div>
+            <div class="chat-row mt"><input id="obNewW" placeholder="Add another (e.g. My bank)"><button class="btn" id="obAddW">Add</button></div>`,
+          plan: () => `<h2>How should your income split?</h2><p class="muted">Choose a starting plan — every percentage can be changed later.</p>
+            <div class="ob-plans">${Object.entries(L.TEMPLATES).map(([k, t]) => `<button class="ob-plan ${k === ob.tpl ? 'on' : ''}" data-tpl="${k}">
+              <div class="row between"><b>${esc(t.name)}</b><span class="tag">${esc(t.tag)}</span></div>
+              <small class="muted">${esc(t.desc)}</small>
+              <div class="split-bar mt-s">${t.sections.map((x, i) => `<i style="width:${x[2]}%;background:${L.PALETTE[i]}"></i>`).join('')}</div>
+              <div class="legend" style="margin-top:6px">${t.sections.map((x, i) => `<span><b style="background:${L.PALETTE[i]}"></b>${esc(x[0])} ${x[2]}%</span>`).join('')}</div></button>`).join('')}</div>`,
+          account: () => `<h2>Sync & share <span class="tag">optional</span></h2>
+            <p class="muted">A free account lets you use the app on your phone and computer, share budgets, and get more AI requests each day. Your PIN and private chats never leave your device.</p>
+            <label class="f">Username<input id="obUser" autocomplete="username" placeholder="e.g. leon"></label>
+            <label class="f mt-s">Password<input id="obPass" type="password" autocomplete="new-password" placeholder="8+ characters"></label>
+            <button class="btn primary ob-main mt" id="obCreate">Create my account</button>
+            <button class="btn ghost ob-main" data-next>Skip for now</button>`,
+          done: () => `<div class="ob-logo">${logoHtml}</div><h1>You're all set${ob.name ? ', ' + esc(ob.name.trim()) : ''}!</h1>
+            <p class="muted">Start by logging your next paycheck — it will be split into your buckets automatically.</p>
+            <button class="btn primary ob-main" data-finish="income">Log my first income</button>
+            <button class="btn ghost ob-main" data-finish="dashboard">Explore the app</button>`,
+          login: () => `<h2>Welcome back</h2><p class="muted">Log in to bring your synced budgets to this device.</p>
+            <label class="f">Username<input id="obLUser" autocomplete="username"></label>
+            <label class="f mt-s">Password<input id="obLPass" type="password" autocomplete="current-password"></label>
+            <button class="btn primary ob-main mt" id="obLogin">Log in</button>
+            <div class="row between mt-s"><a href="#" data-back-new class="small">← Back</a><a href="#" id="obForgot" class="small">Forgot password?</a></div>`
+        }[key]();
+        const nav = ['you', 'wallets', 'plan'].includes(key) ? `<div class="row between ob-nav"><button class="btn ghost" data-back>Back</button><button class="btn primary" data-next>Continue</button></div>` : '';
+        host.innerHTML = `<div class="ob-screen"><div class="ob-card" data-step="${key}">${dots}${body}${nav}</div></div>`;
+        bind(key);
+      };
+      const save = () => {
+        if ($('#obName')) ob.name = $('#obName').value;
+        if ($('#obCur')) ob.cur = $('#obCur').value;
+        if ($('#obLira')) ob.lira = $('#obLira').checked;
+        if ($('#obRate')) ob.rate = $('#obRate').value;
+      };
+      const bind = (key) => {
+        $$('[data-next]', host).forEach((b) => (b.onclick = () => { save(); ob.step = Math.min(STEPS.length - 1, ob.step + 1); draw(); }));
+        $$('[data-back]', host).forEach((b) => (b.onclick = () => { save(); ob.step = Math.max(0, ob.step - 1); draw(); }));
+        $$('[data-finish]', host).forEach((b) => (b.onclick = () => finish({ goto: b.dataset.finish })));
+        if ($('[data-login]', host)) $('[data-login]', host).onclick = () => { ob.mode = 'login'; draw(); };
+        if ($('[data-back-new]', host)) $('[data-back-new]', host).onclick = (e) => { e.preventDefault(); ob.mode = 'new'; draw(); };
+        if ($('#obLira')) $('#obLira').onchange = (e) => { $('#obRateBox').classList.toggle('hidden', !e.target.checked); };
+        if ($('#obCur')) $('#obCur').onchange = () => { save(); draw(); };
+        $$('[data-w]', host).forEach((b) => (b.onclick = () => { const w = b.dataset.w; ob.wallets = ob.wallets.includes(w) ? ob.wallets.filter((x) => x !== w) : [...ob.wallets, w]; draw(); }));
+        if ($('#obAddW')) $('#obAddW').onclick = () => { const v = $('#obNewW').value.trim(); if (v && !ob.wallets.includes(v)) ob.wallets.push(v); draw(); };
+        $$('[data-tpl]', host).forEach((b) => (b.onclick = () => { ob.tpl = b.dataset.tpl; draw(); }));
+        if ($('#obCreate')) $('#obCreate').onclick = async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            const r = await call('POST', '/auth/signup', { username: $('#obUser').value.trim(), password: $('#obPass').value });
+            root.account = { token: r.token, username: r.user.username, id: r.user.id, hasRecovery: true };
+            await api.save(root);
+            await finish({ goto: null, keepAfter: true });     // creates the budget from the choices
+            const meta = root.meta.local;
+            try { const b = await call('POST', '/books', { name: 'My budget', shared: false, data: L.forUpload(state) }); Object.assign(meta, { remoteId: b.id, rev: b.rev }); await api.save(root); } catch (_) {}
+            host.innerHTML = '';
+            showRecoveryCode(r.recoveryCode, () => { onboardingDone(); });
+          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+        };
+        if ($('#obLogin')) $('#obLogin').onclick = async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            const r = await call('POST', '/auth/login', { username: $('#obLUser').value.trim(), password: $('#obLPass').value });
+            root.account = { token: r.token, username: r.user.username, id: r.user.id }; await api.save(root);
+            await refreshRemoteBooks();
+            const mine = (remoteBooks || []).find((b) => !b.shared && b.role === 'owner');
+            await finish({ keepBook: true, goto: 'dashboard' });
+            if (mine) await linkRemote(mine);
+            toast('Welcome back' + (r.user.username ? ', ' + nice(r.user.username) : '') + '!');
+          } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+        };
+        if ($('#obForgot')) $('#obForgot').onclick = (e) => { e.preventDefault(); forgotPasswordDialog($('#obLUser').value.trim(), async () => {
+          await refreshRemoteBooks(); const mine = (remoteBooks || []).find((b) => !b.shared && b.role === 'owner');
+          await finish({ keepBook: true, goto: 'dashboard' }); if (mine) await linkRemote(mine); }); };
+        const first = $('input', host); if (first && key !== 'wallets') setTimeout(() => first.focus(), 60);
+      };
+      // after creating an account inside onboarding, show the final screen
+      const onboardingDone = () => {
+        host.innerHTML = `<div class="ob-screen"><div class="ob-card"><div class="ob-logo">${$('.brand .logo').innerHTML}</div><h1>You're all set${ob.name ? ', ' + esc(ob.name.trim()) : ''}!</h1>
+          <p class="muted">Your account is ready and your budget is syncing. Log in with the same account on your other devices.</p>
+          <button class="btn primary ob-main" data-go2="income">Log my first income</button><button class="btn ghost ob-main" data-go2="dashboard">Explore the app</button></div></div>`;
+        $$('[data-go2]', host).forEach((b) => (b.onclick = () => { host.innerHTML = ''; go(b.dataset.go2); syncActive(); }));
+      };
+      draw();
+    });
+  }
+
   // ---------------- Pointer effects: cursor light + ripples ----------------
   let pointerFrame = 0, lastEvt = null;
   document.addEventListener('mousemove', (e) => {
@@ -1366,6 +1613,12 @@
     applyTheme();
     document.body.classList.toggle('sb-collapsed', !!root.device.sbCollapsed);
     if (state.settings.pinHash) await lockScreen();
+    if (needsOnboarding()) {
+      await discover();                       // so account creation/login works during setup
+      render();
+      const target = await onboarding();
+      if (target) page = target;
+    }
     await processRecurring();
     await persist();
     const v = await api.version();
