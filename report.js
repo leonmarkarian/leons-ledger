@@ -103,7 +103,8 @@
       .plan { display: flex; gap: 18px; align-items: center; }
       .plan-list { flex: 1; }
       .plan-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed ${LINE}; }
-      .ai { background: linear-gradient(180deg, #fff0f6, #fff); border: 1px solid #ffd0e2; border-radius: 12px; padding: 14px 16px; white-space: pre-wrap; break-inside: avoid; }
+      .ai { background: linear-gradient(180deg, #fff0f6, #fff); border: 1px solid #ffd0e2; border-radius: 12px; padding: 14px 16px; break-inside: avoid; }
+      .ai p { margin: 0 0 8px; } .ai ul, .ai ol { margin: 0 0 8px; padding-left: 18px; } .ai h4 { margin: 8px 0 4px; }
       .wallets { display: grid; grid-template-columns: repeat(${Math.min(4, wallets.length)}, 1fr); gap: 10px; }
       .foot { margin-top: 26px; padding-top: 10px; border-top: 1px solid ${LINE}; color: ${MUTED}; font-size: 8.5px; display: flex; justify-content: space-between; }
       .section { break-inside: avoid; }
@@ -154,7 +155,7 @@
         <div class="section"><h2>Wallets</h2>
         <div class="wallets">${wallets.map((w) => `<div class="kpi"><div class="l">${esc(w.name)}</div><div class="v ${w.balance < 0 ? 'bad' : ''}" style="font-size:15px">${m(w.balance)}</div></div>`).join('')}</div></div>
 
-        ${report ? `<div class="section"><h2>AI review · ${L.monthLabel(report.month)}</h2><div class="ai">${esc(report.text)}</div></div>` : ''}
+        ${report ? `<div class="section"><h2>AI review · ${L.monthLabel(report.month)}</h2><div class="ai">${L.mdToHtml(report.text)}</div></div>` : ''}
 
         <div class="foot"><span>Leon's Ledger · ${esc(state.settings.currency)} · figures from your own records</span><span>AI notes are general guidance, not licensed financial advice.</span></div>
       </div>
