@@ -31,6 +31,7 @@
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const m = (n) => L.money(n, state);
+  const num = (v) => { const n = Number(String(v == null ? '' : v).replace(/[\s,]/g, (c) => (c === ',' ? '.' : '')).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
   const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
   const fmtDate = (d) => new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const sym = () => esc(state.settings.currencySymbol || '$');
@@ -171,7 +172,7 @@
     return `<select id="${id}" class="cur-select" title="Currency"><option value="USD">${esc(state.settings.currency || 'USD')}</option><option value="LBP">LBP</option></select>`;
   }
   function readAmount(amountSel, curSel) {
-    const raw = Number($(amountSel).value);
+    const raw = num($(amountSel).value);
     const cur = $(curSel) ? $(curSel).value : 'USD';
     const usd = L.toUSD(raw, cur, state.settings.lbpRate);
     return { usd, original: cur === 'LBP' ? { amount: raw, currency: 'LBP', rate: state.settings.lbpRate } : null, raw, cur };
@@ -354,7 +355,7 @@
       return `<h1>Log income</h1><p class="sub">Enter what you got paid. It's split automatically by your plan — tweak it for this payment if you want.</p>
         <div class="grid g12">
           <div class="card">
-            <label class="f">Amount received<div class="amount-row"><input class="big" id="incAmount" type="number" min="0" step="0.01" placeholder="0.00" autofocus>${currencySelect('incCur')}</div></label>
+            <label class="f">Amount received<div class="amount-row"><input class="big" id="incAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00" autofocus>${currencySelect('incCur')}</div></label>
             <div class="small muted mt-s" id="incConv"></div>
             <div class="form-grid mt">
               <label class="f">Date<input id="incDate" type="date" value="${today()}"></label>
@@ -384,8 +385,8 @@
       const types = Object.entries(L.SECTION_TYPES);
       return `<div class="sticky-bar"><div class="row between"><div><h1>Split plan</h1><p class="sub" style="margin:0">Sections get a % of each income; categories get a % of their section. Edit anything.</p></div>
           <div class="row"><button class="btn ghost" id="planReset">Discard changes</button><button class="btn" id="planAddSec">＋ Add section</button><button class="btn primary" id="planSave" ${v.ok ? '' : 'disabled'}>Save plan</button></div></div>
-          <div class="row mt-s between"><div class="small">Sections total: <b class="${Math.abs(v.total - 100) < 0.001 ? 'good' : 'bad'}">${v.total}%</b></div>
-          <div class="errors">${v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div></div>
+          <div class="row mt-s between"><div class="small">Sections total: <b id="planTotal" class="${Math.abs(v.total - 100) < 0.001 ? 'good' : 'bad'}">${v.total}%</b></div>
+          <div class="errors" id="planErrors">${v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div></div>
         ${draftPlan.map((s, si) => {
           const ct = L.round2(L.sum(s.categories, (c) => Number(c.percent) || 0));
           return `<div class="plan-sec" style="--c:${s.color}">
@@ -393,22 +394,22 @@
               <input type="color" value="${s.color}" data-s="${si}" data-k="color">
               <input value="${esc(s.name)}" data-s="${si}" data-k="name" placeholder="Section name">
               <select data-s="${si}" data-k="type">${types.map(([k, t]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
-              <div class="pct-input"><input type="number" min="0" max="100" step="0.5" value="${s.percent}" data-s="${si}" data-k="percent"></div>
+              <div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" value="${s.percent}" data-s="${si}" data-k="percent"></div>
               <button class="icon-btn" data-delsec="${si}" title="Delete section">✕</button>
             </div>
             <div class="plan-cats">
               <div class="plan-cat small muted"><span>Category</span><span>% of section</span><span>${s.type === 'debt' ? 'Total owed' : 'Goal (optional)'}</span><span>${s.type === 'debt' ? 'Interest % per year · Minimum payment' : 'Note'}</span><span></span></div>
               ${s.categories.map((c, ci) => `<div class="plan-cat">
                 <input value="${esc(c.name)}" data-s="${si}" data-c="${ci}" data-k="name" placeholder="Category name">
-                <div class="pct-input"><input type="number" min="0" max="100" step="0.5" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div>
-                <div class="money-input" data-sym="${sym()}"><input type="number" min="0" step="0.01" value="${c.target || ''}" placeholder="—" data-s="${si}" data-c="${ci}" data-k="target"></div>
-                ${s.type === 'debt' ? `<div class="debt-extra"><div class="pct-input" title="Yearly interest rate"><input type="number" min="0" step="0.1" value="${c.apr || ''}" placeholder="Interest/yr" data-s="${si}" data-c="${ci}" data-k="apr"></div>
-                  <div class="money-input" data-sym="${sym()}" title="Minimum monthly payment"><input type="number" min="0" step="0.01" value="${c.minPayment || ''}" placeholder="Min/month" data-s="${si}" data-c="${ci}" data-k="minPayment"></div></div>`
+                <div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div>
+                <div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" value="${c.target || ''}" placeholder="—" data-s="${si}" data-c="${ci}" data-k="target"></div>
+                ${s.type === 'debt' ? `<div class="debt-extra"><div class="pct-input" title="Yearly interest rate"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.1" value="${c.apr || ''}" placeholder="Interest/yr" data-s="${si}" data-c="${ci}" data-k="apr"></div>
+                  <div class="money-input" data-sym="${sym()}" title="Minimum monthly payment"><input type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" value="${c.minPayment || ''}" placeholder="Min/month" data-s="${si}" data-c="${ci}" data-k="minPayment"></div></div>`
                   : `<input value="${esc(c.note || '')}" data-s="${si}" data-c="${ci}" data-k="note" placeholder="Optional">`}
                 <button class="icon-btn" data-delcat="${si}|${ci}" title="Delete category">✕</button></div>`).join('')}
               <div class="row between"><button class="btn sm" data-addcat="${si}">＋ Add category</button>
-                <span class="small">Categories total: <b class="${Math.abs(ct - 100) < 0.001 ? 'good' : 'bad'}">${ct}%</b>
-                ${Math.abs(ct - 100) > 0.001 ? `<button class="btn sm ghost" data-even="${si}">Split evenly</button>` : ''}</span></div>
+                <span class="small">Categories total: <b data-cattotal="${si}" class="${Math.abs(ct - 100) < 0.001 ? 'good' : 'bad'}">${ct}%</b>
+                <button class="btn sm ghost ${Math.abs(ct - 100) > 0.001 ? '' : 'hidden'}" data-even="${si}">Split evenly</button></span></div>
             </div></div>`;
         }).join('')}
         <p class="muted small">Changing the plan only affects future incomes. Past incomes keep the split they were saved with, so your history stays accurate.</p>`;
@@ -440,7 +441,7 @@
         <div class="card mt"><h2>Debt payoff planner</h2>
           ${debts.length ? `
           <div class="row wrap">
-            <label class="f" style="min-width:200px">Paying towards debts each month<div class="money-input" data-sym="${sym()}"><input id="dbBudget" type="number" min="0" step="10" value="${debtBudget}"></div></label>
+            <label class="f" style="min-width:200px">Paying towards debts each month<div class="money-input" data-sym="${sym()}"><input id="dbBudget" type="text" inputmode="decimal" autocomplete="off" min="0" step="10" value="${debtBudget}"></div></label>
             <div class="tabs" style="margin:18px 0 0"><button data-strat="avalanche" class="${debtStrategy === 'avalanche' ? 'active' : ''}">Avalanche · highest interest first</button><button data-strat="snowball" class="${debtStrategy === 'snowball' ? 'active' : ''}">Snowball · smallest first</button></div>
           </div>
           ${debts.some((d) => !d.apr) ? `<p class="small warn">Tip: add each debt's interest rate and minimum payment in Split plan for an accurate plan.</p>` : ''}
@@ -550,7 +551,7 @@
                 <label class="f full">Your name (the advisor uses it)<input id="sName" value="${esc(s.userName || '')}" placeholder="Optional"></label>
                 <label class="f">Currency code<input id="sCur" value="${esc(s.currency)}"></label>
                 <label class="f">Currency symbol<input id="sSym" value="${esc(s.currencySymbol)}"></label>
-                <label class="f full">Lebanese lira rate (LBP per $1)<input id="sRate" type="number" min="1" step="1" value="${s.lbpRate}"></label>
+                <label class="f full">Lebanese lira rate (LBP per $1)<input id="sRate" type="text" inputmode="numeric" autocomplete="off" min="1" step="1" value="${s.lbpRate}"></label>
               </div>
               <button class="btn primary mt" id="sSave">Save settings</button>
             </div>
@@ -559,7 +560,7 @@
             </div>
             <div class="card mt"><h2>Wallets</h2>
               <p class="muted small" style="margin-top:0">Where your money physically is — cash, cards, bank. Starting balance = what was in it before you started using the app.</p>
-              ${s.wallets.map((w, i) => `<div class="wallet-edit"><input value="${esc(w.name)}" data-wname="${i}" placeholder="Wallet name"><div class="money-input" data-sym="${sym()}"><input type="number" step="0.01" value="${w.opening || 0}" data-wopen="${i}" title="Starting balance"></div><button class="icon-btn" data-wdel="${i}" title="Delete wallet">✕</button></div>`).join('')}
+              ${s.wallets.map((w, i) => `<div class="wallet-edit"><input value="${esc(w.name)}" data-wname="${i}" placeholder="Wallet name"><div class="money-input" data-sym="${sym()}"><input type="text" inputmode="decimal" autocomplete="off" step="0.01" value="${w.opening || 0}" data-wopen="${i}" title="Starting balance"></div><button class="icon-btn" data-wdel="${i}" title="Delete wallet">✕</button></div>`).join('')}
               <div class="row mt-s"><button class="btn sm" id="wAdd">＋ Add wallet</button><button class="btn sm primary" id="wSave">Save wallets</button></div>
             </div>
             <div class="card mt"><h2>App lock</h2>
@@ -619,7 +620,7 @@
   function incomeOverrides() {
     if (!$('#incCustom') || !$('#incCustom').checked) return null;
     const o = {};
-    $$('[data-ov]').forEach((el) => { o[el.dataset.ov] = Number(el.value) || 0; });
+    $$('[data-ov]').forEach((el) => { o[el.dataset.ov] = num(el.value); });
     return o;
   }
 
@@ -631,11 +632,11 @@
       const sa = split.sectionAmounts[i];
       return `<div style="padding:10px 0;border-top:1px solid var(--line)">
         <div class="row between"><div class="row"><b style="width:10px;height:10px;border-radius:3px;background:${s.color};display:inline-block"></b><b>${esc(s.name)}</b>
-          ${custom ? `<div class="pct-input" style="width:90px"><input type="number" min="0" max="100" step="0.5" data-ov="${s.id}" value="${sa.percent}"></div>` : `<span class="muted small">${sa.percent}%</span>`}</div>
-          <b>${m(sa.amount)}</b></div>
-        <div class="muted small mt-s">${s.categories.map((c) => { const a = split.allocations.find((x) => x.categoryId === c.id); return `${esc(c.name)} ${m(a.amount)}`; }).join(' · ')}</div></div>`;
+          ${custom ? `<div class="pct-input" style="width:90px"><input type="text" inputmode="decimal" autocomplete="off" min="0" max="100" step="0.5" data-ov="${s.id}" value="${sa.percent}"></div>` : `<span class="muted small">${sa.percent}%</span>`}</div>
+          <b data-secamt="${s.id}">${m(sa.amount)}</b></div>
+        <div class="muted small mt-s" data-seccats="${s.id}">${s.categories.map((c) => { const a = split.allocations.find((x) => x.categoryId === c.id); return `${esc(c.name)} ${m(a.amount)}`; }).join(' · ')}</div></div>`;
     }).join('')}
-    ${custom ? `<div class="small mt-s">Total: <b class="${Math.abs(total - 100) < 0.001 ? 'good' : 'bad'}">${total}%</b></div>` : ''}`;
+    ${custom ? `<div class="small mt-s">Total: <b id="ovTotal" class="${Math.abs(total - 100) < 0.001 ? 'good' : 'bad'}">${total}%</b></div>` : ''}`;
   }
 
   function lastIncomeAdviceHtml() {
@@ -651,7 +652,7 @@
       <div id="spAvail" class="small muted mt-s"></div>
       <div class="row between mt"><span class="small muted">Amount</span>
         <button class="btn sm" id="spScan" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Reading receipt…' : '📷 Scan receipt'}</button><input type="file" id="spScanFile" accept="image/*" capture="environment" class="hidden"></div>
-      <div class="amount-row mt-s"><input class="big" id="spAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('spCur')}</div>
+      <div class="amount-row mt-s"><input class="big" id="spAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00">${currencySelect('spCur')}</div>
       <div class="small muted mt-s" id="spConv"></div>
       <div class="form-grid mt">
         <label class="f">Date<input id="spDate" type="date" value="${today()}"></label>
@@ -667,7 +668,7 @@
       <div class="form-grid">
         <label class="f">From<select id="trFrom">${categoryOptions()}</select></label>
         <label class="f">To<select id="trTo">${categoryOptions()}</select></label>
-        <label class="f">Amount<div class="money-input" data-sym="${sym()}"><input id="trAmount" type="number" min="0" step="0.01" placeholder="0.00"></div></label>
+        <label class="f">Amount<div class="money-input" data-sym="${sym()}"><input id="trAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00"></div></label>
         <label class="f">Date<input id="trDate" type="date" value="${today()}"></label>
         <label class="f full">Note<input id="trNote" placeholder="Optional"></label>
       </div>
@@ -681,7 +682,7 @@
       <div class="form-grid">
         <label class="f">From<select id="wtFrom">${walletOptions()}</select></label>
         <label class="f">To<select id="wtTo">${walletOptions(state.settings.wallets[1] && state.settings.wallets[1].id)}</select></label>
-        <label class="f">Amount<div class="amount-row"><input id="wtAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('wtCur')}</div></label>
+        <label class="f">Amount<div class="amount-row"><input id="wtAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00">${currencySelect('wtCur')}</div></label>
         <label class="f">Date<input id="wtDate" type="date" value="${today()}"></label>
         <label class="f full">Note<input id="wtNote" placeholder="Optional"></label>
       </div>
@@ -694,8 +695,8 @@
     return `<div class="grid g12"><div class="card"><h2>Add a recurring bill</h2>
       <div class="form-grid">
         <label class="f full">Name<input id="rcName" placeholder="e.g. Rent, Netflix, Car loan"></label>
-        <label class="f">Amount<div class="amount-row"><input id="rcAmount" type="number" min="0" step="0.01" placeholder="0.00">${currencySelect('rcCur')}</div></label>
-        <label class="f">Day of the month<input id="rcDay" type="number" min="1" max="28" value="1"></label>
+        <label class="f">Amount<div class="amount-row"><input id="rcAmount" type="text" inputmode="decimal" autocomplete="off" min="0" step="0.01" placeholder="0.00">${currencySelect('rcCur')}</div></label>
+        <label class="f">Day of the month<input id="rcDay" type="text" inputmode="numeric" autocomplete="off" min="1" max="28" value="1"></label>
         <label class="f full">From bucket<select id="rcCat">${categoryOptions()}</select></label>
         <label class="f">Paid from wallet<select id="rcWallet">${walletOptions()}</select></label>
         <label class="f">When it's due<select id="rcAuto"><option value="1">Log it automatically</option><option value="0">Remind me, I'll confirm</option></select></label>
@@ -728,8 +729,51 @@
   }
 
   // ---------------- Render & events ----------------
+  // ---------------- Phone navigation: bottom bar + sheets ----------------
+  const MORE_PAGES = ['goals', 'plan', 'history', 'settings', 'income', 'spend'];
+  function updateMobileBar() {
+    $$('[data-mtab]').forEach((b) => b.classList.toggle('active', b.dataset.mtab === page || (b.dataset.mtab === 'more' && ['goals', 'plan', 'history', 'settings'].includes(page))));
+  }
+  function sheet(title, items, extra) {
+    const rootEl = $('#sheetRoot');
+    rootEl.innerHTML = `<div class="sheet-bg"><div class="sheet" role="dialog" aria-label="${esc(title)}"><div class="sheet-grip"></div><div class="sheet-title">${esc(title)}</div>
+      ${extra || ''}<div class="sheet-grid">${items.map((it, i) => `<button class="sheet-item" data-si="${i}"><span class="si-icon">${it.icon}</span><span class="si-text"><b>${esc(it.label)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span></button>`).join('')}</div></div></div>`;
+    const bg = $('.sheet-bg', rootEl), sh = $('.sheet', rootEl);
+    const close = () => { bg.classList.add('closing'); setTimeout(() => { rootEl.innerHTML = ''; }, 220); };
+    bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
+    $$('[data-si]', rootEl).forEach((b) => (b.onclick = () => { const it = items[+b.dataset.si]; rootEl.innerHTML = ''; it.run(); }));
+    // swipe down to close
+    let y0 = null;
+    sh.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+    sh.addEventListener('touchmove', (e) => { if (y0 == null) return; const dy = Math.max(0, e.touches[0].clientY - y0); sh.style.transform = `translateY(${dy}px)`; }, { passive: true });
+    sh.addEventListener('touchend', (e) => { const dy = (e.changedTouches[0].clientY - (y0 || 0)); y0 = null; if (dy > 80) close(); else sh.style.transform = ''; });
+    return { el: rootEl, close };
+  }
+  function openAddSheet() {
+    sheet('Add', [
+      { icon: '＋', label: 'Log income', sub: 'Split a payment into your buckets', run: () => go('income') },
+      { icon: '−', label: 'Spend / Pay', sub: 'Groceries, a bill, a debt payment', run: () => { spendTab = 'spend'; go('spend'); } },
+      { icon: '📷', label: 'Scan a receipt', sub: 'Photo → amount, date and category', run: () => { spendTab = 'spend'; go('spend'); const f = $('#spScanFile'); if (f) f.click(); } },
+      { icon: '⇄', label: 'Move money', sub: 'Between buckets or wallets', run: () => { spendTab = 'transfer'; go('spend'); } },
+      { icon: '🔁', label: 'Recurring bill', sub: 'Rent, subscriptions, loans', run: () => { spendTab = 'recurring'; go('spend'); } }
+    ]);
+  }
+  function openMoreSheet() {
+    const keys = Object.keys(root.books);
+    const switcher = keys.length > 1 ? `<div class="sheet-books">${keys.map((k) => `<button class="book-chip ${k === root.active ? 'active' : ''}" data-book="${k}">${esc(root.meta[k].name || 'Budget')}${root.meta[k].shared ? ' 👥' : ''}</button>`).join('')}</div>` : '';
+    const status = root.account ? `<div class="sheet-status small muted">Signed in as <b>${esc(root.account.username)}</b>${syncState.status === 'ok' ? ' · <span class="good">✓ Synced</span>' : syncState.status === 'offline' ? ' · Offline' : ''}</div>` : '';
+    const sh = sheet('More', [
+      { icon: '◎', label: 'Goals & debts', sub: 'When you’ll reach each goal', run: () => go('goals') },
+      { icon: '%', label: 'Split plan', sub: 'Edit sections and percentages', run: () => go('plan') },
+      { icon: '☰', label: 'History', sub: 'Every income and payment', run: () => go('history') },
+      { icon: '⚙', label: 'Settings', sub: 'Account, sync, wallets, theme', run: () => go('settings') }
+    ], status + switcher);
+    $$('[data-book]', sh.el).forEach((b) => (b.onclick = () => { sh.el.innerHTML = ''; switchBook(b.dataset.book); }));
+  }
+
   function render() {
     $$('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
+    updateMobileBar();
     const focused = document.activeElement && document.activeElement.id;
     $('#main').innerHTML = pages[page]();
     bind();
@@ -788,10 +832,12 @@
       $('#incConv').textContent = a.cur === 'LBP' && a.raw ? `${lbp(a.raw)} = ${m(a.usd)} at ${state.settings.lbpRate.toLocaleString('en-US')} LBP per $1` : '';
       $('#incPreview').innerHTML = incomePreviewHtml(a.usd, incomeOverrides()); bindOverrides();
     };
+    // typing in a percentage box only updates the numbers next to it (no redraw = no jumping cursor)
     const bindOverrides = () => $$('[data-ov]').forEach((el) => (el.oninput = () => {
-      const o = incomeOverrides(); const pos = el.dataset.ov;
-      $('#incPreview').innerHTML = incomePreviewHtml(amt(), o); bindOverrides();
-      const again = $(`[data-ov="${pos}"]`); if (again) { again.focus(); const v = again.value; again.value = ''; again.value = v; }
+      const o = incomeOverrides(); const split = L.splitIncome(amt(), state.sections, o);
+      split.sectionAmounts.forEach((sa) => { const b = $(`[data-secamt="${sa.sectionId}"]`); if (b) b.textContent = m(sa.amount); });
+      state.sections.forEach((sec) => { const d = $(`[data-seccats="${sec.id}"]`); if (d) d.textContent = sec.categories.map((c) => `${c.name} ${m(split.allocations.find((x) => x.categoryId === c.id).amount)}`).join(' · '); });
+      const total = L.round2(L.sum(Object.values(o))); const t = $('#ovTotal'); if (t) { t.textContent = total + '%'; t.className = Math.abs(total - 100) < 0.001 ? 'good' : 'bad'; }
     }));
     $('#incAmount').oninput = refresh;
     $('#incCur').onchange = refresh;
@@ -853,7 +899,7 @@
         if (!name) return toast('Give the bill a name.', true);
         if (!(a.usd > 0)) return toast('Enter an amount greater than zero.', true);
         const [sectionId, categoryId] = $('#rcCat').value.split('|');
-        const day = Math.min(28, Math.max(1, Number($('#rcDay').value) || 1));
+        const day = Math.min(28, Math.max(1, Math.round(num($('#rcDay').value)) || 1));
         if ($('#rcAuto').value === '0') { try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {} }
         state.recurring.push({ id: L.uid('rc'), name, amount: a.usd, sectionId, categoryId, walletId: $('#rcWallet').value, day, auto: $('#rcAuto').value === '1', lastLogged: Number(today().slice(8, 10)) >= day ? L.monthKey(today()) : '' });
         await persist(); toast(`${name} added — next one on the ${ord(day)}.`); render();
@@ -864,7 +910,7 @@
       }));
     } else {
       $('#trSave').onclick = async () => {
-        const amount = L.round2($('#trAmount').value);
+        const amount = L.round2(num($('#trAmount').value));
         if (!(amount > 0)) return toast('Enter an amount greater than zero.', true);
         if ($('#trFrom').value === $('#trTo').value) return toast('Pick two different buckets.', true);
         const [fs, fc] = $('#trFrom').value.split('|'); const [ts, tc] = $('#trTo').value.split('|');
@@ -884,15 +930,25 @@
       el.addEventListener(evt, () => {
         const s = draftPlan[+el.dataset.s]; const k = el.dataset.k;
         const target = el.dataset.c != null ? s.categories[+el.dataset.c] : s;
-        target[k] = ['percent', 'target', 'apr', 'minPayment'].includes(k) ? (el.value === '' ? 0 : Number(el.value)) : el.value;
-        if (k === 'percent' || k === 'color' || k === 'type') {
-          const id = el.dataset.s + '-' + (el.dataset.c || '') + '-' + k;
-          rerender();
-          const again = $$('[data-k]').find((x) => x.dataset.s + '-' + (x.dataset.c || '') + '-' + x.dataset.k === id);
-          if (again && k === 'percent') { again.focus(); }
-        }
+        target[k] = ['percent', 'target', 'apr', 'minPayment'].includes(k) ? num(el.value) : el.value;
+        if (k === 'color' || k === 'type') rerender();      // a picker changed: safe to redraw
+        else if (k === 'percent') updatePlanTotals();      // typing: only update the totals text
       });
     });
+    function updatePlanTotals() {
+      const v = L.validatePlan(draftPlan);
+      const t = $('#planTotal'); t.textContent = v.total + '%'; t.className = Math.abs(v.total - 100) < 0.001 ? 'good' : 'bad';
+      $('#planErrors').innerHTML = v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('');
+      $('#planSave').disabled = !v.ok;
+      draftPlan.forEach((sec, si) => {
+        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0));
+        const el = $(`[data-cattotal="${si}"]`); if (!el) return;
+        el.textContent = ct + '%'; el.className = Math.abs(ct - 100) < 0.001 ? 'good' : 'bad';
+        const ev = $(`[data-even="${si}"]`); if (ev) ev.classList.toggle('hidden', Math.abs(ct - 100) < 0.001);
+        const card = el.closest('.plan-sec'); if (card) card.style.setProperty('--c', sec.color);
+      });
+    }
+
     $('#planAddSec').onclick = () => { draftPlan.push({ id: L.uid('sec'), name: 'New section', type: 'other', percent: 0, color: L.PALETTE[draftPlan.length % L.PALETTE.length], categories: [{ id: L.uid('cat'), name: 'General', percent: 100, target: 0, note: '' }] }); rerender(); };
     $$('[data-addcat]').forEach((b) => (b.onclick = () => { draftPlan[+b.dataset.addcat].categories.push({ id: L.uid('cat'), name: 'New category', percent: 0, target: 0, note: '' }); rerender(); }));
     $$('[data-even]').forEach((b) => (b.onclick = () => {
@@ -939,7 +995,7 @@
       const item = state[listOf[kind]].find((x) => x.id === id);
       modal(`<h2>Edit ${kind === 'spend' ? 'payment' : kind}</h2>
         <div class="form-grid">
-          <label class="f">Amount<input id="eAmount" type="number" step="0.01" value="${item.amount}"></label>
+          <label class="f">Amount<input id="eAmount" type="text" inputmode="decimal" autocomplete="off" step="0.01" value="${item.amount}"></label>
           <label class="f">Date<input id="eDate" type="date" value="${item.date.slice(0, 10)}"></label>
           ${kind === 'spend' ? `<label class="f full">Bucket<select id="eCat">${categoryOptions(item.sectionId + '|' + item.categoryId)}</select></label>
             <label class="f">Wallet<select id="eWallet">${walletOptions(item.walletId)}</select></label>` : ''}
@@ -951,7 +1007,7 @@
       (el, close) => {
         $('[data-x]', el).onclick = close;
         $('[data-ok]', el).onclick = async () => {
-          const amount = L.round2($('#eAmount', el).value);
+          const amount = L.round2(num($('#eAmount', el).value));
           if (!(amount > 0)) return toast('Amount must be greater than zero.', true);
           if (kind === 'income' && amount !== item.amount) {
             const parts = L.distribute(amount, item.allocations.map((a) => a.amount || 0.0001));
@@ -993,7 +1049,7 @@
       s.aiEnabled = $('#sAi').checked; s.autoAdviceOnIncome = $('#sAuto').checked;
       s.apiKey = $('#sKey').value.trim(); s.model = $('#sModel').value.trim() || 'claude-haiku-5-5';
       s.aboutMe = $('#sAbout').value.trim(); s.currency = $('#sCur').value.trim() || 'USD'; s.currencySymbol = $('#sSym').value || '$';
-      s.userName = $('#sName').value.trim(); s.lbpRate = Math.max(1, Number($('#sRate').value) || 89500);
+      s.userName = $('#sName').value.trim(); s.lbpRate = Math.max(1, num($('#sRate').value) || 89500);
       if ($('#sModel').value.trim() !== 'claude-haiku-5-5') s.modelChosen = true;
       state.settingsUpdatedAt = Date.now();
       await persist(); toast('Settings saved.');
@@ -1023,7 +1079,7 @@
     $('#uCheck').onclick = () => { manualUpdateCheck = true; api.checkUpdates(); };
     bindAccount();
     $$('[data-theme-pick]').forEach((b) => (b.onclick = async () => { state.settings.theme = b.dataset.themePick; applyTheme(); await persist(); render(); }));
-    const readWallets = () => state.settings.wallets.map((w, i) => Object.assign({}, w, { name: ($(`[data-wname="${i}"]`).value || '').trim() || w.name, opening: Number($(`[data-wopen="${i}"]`).value) || 0 }));
+    const readWallets = () => state.settings.wallets.map((w, i) => Object.assign({}, w, { name: ($(`[data-wname="${i}"]`).value || '').trim() || w.name, opening: num($(`[data-wopen="${i}"]`).value) }));
     $('#wAdd').onclick = () => { state.settings.wallets = readWallets(); state.settings.wallets.push({ id: L.uid('w'), name: 'New wallet', opening: 0 }); render(); };
     $('#wSave').onclick = async () => { state.settings.wallets = readWallets(); state.settingsUpdatedAt = Date.now(); await persist(); toast('Wallets saved.'); render(); };
     $$('[data-wdel]').forEach((b) => (b.onclick = async () => {
@@ -1169,7 +1225,7 @@
       $('.g-eta', box).innerHTML = g.left <= 0 ? '<b class="good">Goal reached 🎉</b>' : g.months == null ? '<span class="warn">Not growing yet</span>' : `<b>${g.months}</b> month${g.months === 1 ? '' : 's'} left · <b>${L.monthLabel(g.eta)}</b>`;
     }));
     $$('[data-extra]').forEach((el) => (el.onchange = () => { const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; }));
-    if ($('#dbBudget')) $('#dbBudget').onchange = () => { debtBudget = Math.max(0, Number($('#dbBudget').value) || 0); const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; };
+    if ($('#dbBudget')) $('#dbBudget').onchange = () => { debtBudget = Math.max(0, num($('#dbBudget').value)); const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; };
     $$('[data-strat]').forEach((b) => (b.onclick = () => { debtStrategy = b.dataset.strat; const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; }));
   }
 
@@ -1282,6 +1338,8 @@
 
   // ---------------- Boot ----------------
   $$('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.page)));
+  $$('[data-mtab]').forEach((b) => (b.onclick = () => (b.dataset.mtab === 'more' ? openMoreSheet() : go(b.dataset.mtab))));
+  $('#fab').onclick = openAddSheet;
   (async () => {
     loadRoot(await api.load());
     applyTheme();

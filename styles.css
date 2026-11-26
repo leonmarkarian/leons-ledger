@@ -114,8 +114,6 @@ tr:hover td { background: rgba(var(--accent-rgb),.05); }
 
 /* ================= Motion & interaction (v1.0.5) ================= */
 :root { --accent-rgb: 255, 77, 141; --ease: cubic-bezier(.22, .61, .36, 1); }
-html { scroll-behavior: smooth; }
-main { scroll-behavior: smooth; }
 
 /* Buttons: soft glow, lift, press, cursor light */
 .btn, nav button, .tabs button, .icon-btn {
@@ -410,3 +408,65 @@ select { max-width: 100%; }
 .mobile-book { display: none; margin-bottom: 12px; }
 .mobile-book select { width: 100%; font-weight: 600; }
 @media (max-width: 760px) { .mobile-book { display: block; } }
+
+/* ================= Phone navigation (v1.2.1) ================= */
+.mobile-bar, #sheetRoot { display: none; }
+@media (max-width: 760px) {
+  .sidebar { display: none !important; }
+  .mobile-bar {
+    display: grid; grid-template-columns: repeat(5, 1fr); align-items: end;
+    position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 30;
+    background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--line); border-radius: 22px; padding: 6px 4px; box-shadow: 0 10px 30px var(--shadow);
+  }
+  .mobile-bar button { background: none; border: 0; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 0 5px; border-radius: 14px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .mobile-bar button span { font-size: 19px; line-height: 1; transition: transform .25s var(--ease); }
+  .mobile-bar button em { font-style: normal; font-size: 10.5px; font-weight: 600; }
+  .mobile-bar button.active { color: var(--accent); }
+  .mobile-bar button.active span { transform: translateY(-1px) scale(1.12); }
+  .mobile-bar button:active span { transform: scale(.9); }
+  .mobile-bar .fab { justify-self: center; width: 56px; height: 56px; margin-top: -26px; border-radius: 50%; padding: 0; justify-content: center;
+    background: var(--accent); color: var(--on-accent); box-shadow: 0 8px 22px rgba(var(--accent-rgb), .45), 0 0 0 5px var(--bg); }
+  .mobile-bar .fab span { font-size: 28px; font-weight: 300; }
+  .mobile-bar .fab:active { transform: scale(.94); }
+  main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+  #toasts { bottom: calc(96px + env(safe-area-inset-bottom)); }
+
+  #sheetRoot { display: block; }
+  .sheet-bg { position: fixed; inset: 0; z-index: 60; background: var(--overlay); display: flex; align-items: flex-end; animation: fade .2s ease both; }
+  .sheet-bg.closing { animation: fadeOut .22s ease forwards; }
+  .sheet-bg.closing .sheet { animation: sheetDown .22s ease forwards; }
+  .sheet { width: 100%; background: var(--panel); border-top-left-radius: 24px; border-top-right-radius: 24px; border-top: 1px solid var(--line);
+    padding: 8px 16px calc(18px + env(safe-area-inset-bottom)); animation: sheetUp .32s var(--ease) both; transition: transform .15s; max-height: 85vh; overflow-y: auto; }
+  .sheet-grip { width: 42px; height: 5px; border-radius: 99px; background: var(--line); margin: 4px auto 10px; }
+  .sheet-title { font-weight: 700; font-size: 17px; margin: 2px 4px 12px; }
+  .sheet-grid { display: grid; gap: 8px; }
+  .sheet-item { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: 16px; padding: 13px 14px; color: var(--text); cursor: pointer; }
+  .sheet-item:active { transform: scale(.98); background: rgba(var(--accent-rgb), .08); }
+  .si-icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 19px; background: rgba(var(--accent-rgb), .14); color: var(--accent); flex: 0 0 auto; }
+  .si-text { display: flex; flex-direction: column; gap: 2px; }
+  .si-text small { color: var(--muted); font-size: 12px; }
+  .sheet-books { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 12px; scrollbar-width: none; }
+  .book-chip { flex: 0 0 auto; border: 1px solid var(--line); background: var(--panel2); color: var(--text); border-radius: 99px; padding: 8px 14px; font-weight: 600; }
+  .book-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb), .1); }
+  .sheet-status { margin: -4px 4px 12px; }
+  .mobile-book { display: none !important; }
+}
+@keyframes sheetUp { from { transform: translateY(100%); } }
+@keyframes sheetDown { to { transform: translateY(100%); } }
+@keyframes fadeOut { to { opacity: 0; } }
+
+/* touch screens: no sticky hover effects (they made things shift when tapping) */
+@media (hover: none) {
+  .btn:hover, .card:hover, nav button:hover, .wallet:hover, .theme-swatch:hover, .icon-btn:hover { transform: none !important; }
+  .card:hover::after, .plan-sec:hover::after, .btn:hover::before { opacity: 0 !important; }
+  .cat-row:hover { background: none; padding-left: 0; padding-right: 0; }
+  input:hover, select:hover, textarea:hover { border-color: var(--line); }
+  .btn.primary:hover, .btn:hover { box-shadow: none; filter: none; }
+}
+@media (max-width: 760px) {
+  .mobile-bar button, .mobile-bar button.active, .mobile-bar button:hover { background: none; box-shadow: none; transform: none; }
+  .mobile-bar button::before { display: none; }
+  .mobile-bar .fab, .mobile-bar .fab:hover { background: var(--accent); box-shadow: 0 8px 22px rgba(var(--accent-rgb), .45), 0 0 0 5px var(--bg); }
+  .mobile-bar button.active::after { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-top: 1px; }
+}

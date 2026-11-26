@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#000000" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.anthropic.com https://*.workers.dev https://leonmarkarian.github.io; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:;" />
   <title>Leon's Ledger</title>
-  <link rel="stylesheet" href="styles.css?v=1.2.0" />
+  <link rel="stylesheet" href="styles.css?v=1.2.1" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=1.2.0" />
-  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-1.2.0.png" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=1.2.1" />
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-1.2.1.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
@@ -37,12 +37,20 @@
     <div class="update-pill hidden" id="updatePill"></div>
   </aside>
   <main id="main"></main>
+  <nav class="mobile-bar" id="mobileBar" aria-label="Main">
+    <button data-mtab="dashboard"><span>◧</span><em>Home</em></button>
+    <button data-mtab="reports"><span>▦</span><em>Reports</em></button>
+    <button class="fab" id="fab" aria-label="Add"><span>＋</span></button>
+    <button data-mtab="advisor"><span>✦</span><em>AI</em></button>
+    <button data-mtab="more"><span>☰</span><em>More</em></button>
+  </nav>
+  <div id="sheetRoot"></div>
   <div id="toasts"></div>
   <div id="modalRoot"></div>
   <div id="lockRoot"></div>
-  <script src="web-api.js?v=1.2.0"></script>
-  <script src="logic.js?v=1.2.0"></script>
-  <script src="report.js?v=1.2.0"></script>
-  <script src="app.js?v=1.2.0"></script>
+  <script src="web-api.js?v=1.2.1"></script>
+  <script src="logic.js?v=1.2.1"></script>
+  <script src="report.js?v=1.2.1"></script>
+  <script src="app.js?v=1.2.1"></script>
 </body>
 </html>
