@@ -501,3 +501,10 @@ body.sb-collapsed nav button { justify-content: center; padding: 11px 0; gap: 0;
   .chat-row .btn { padding: 10px 12px; }
 }
 .chat .msg.assistant { background: none; border: 0; padding: 0; border-radius: 0; max-width: none; }
+
+/* shared budget members (v1.3.1) */
+.members { display: flex; align-items: center; gap: 0; margin: -14px 0 18px; }
+.members.mb { margin: 0 0 12px; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--on-accent); background: var(--accent); border: 2px solid var(--panel); margin-right: -8px; }
+.avatar:nth-child(2) { background: #7c9cff; } .avatar:nth-child(3) { background: #5fd3a7; } .avatar:nth-child(4) { background: #f2b45b; }
+.members .small { margin-left: 16px; }
