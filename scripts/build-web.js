@@ -54,5 +54,6 @@ const files = ['./', './index.html', `./styles.css?v=${version}`, `./web-api.js?
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 fs.writeFileSync(path.join(out, 'sw.js'), fs.readFileSync(path.join(root, 'web', 'sw.js'), 'utf8')
   .replace('__VERSION__', version).replace('__FILES__', JSON.stringify(files)));
+for (const f of ['privacy.html', 'terms.html']) fs.copyFileSync(path.join(root, 'web', f), path.join(out, f));
 fs.writeFileSync(path.join(out, '.nojekyll'), '');
 console.log(`Web app v${version} built in dist-web/`);

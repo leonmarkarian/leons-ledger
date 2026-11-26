@@ -1,7 +1,21 @@
 const assert = require('assert');
 const L = require('../src/logic.js');
+// The tests use the original five-section plan so their expected numbers stay fixed.
+function legacyState() {
+  const st = L.defaultState();
+  const c = (name, percent, target) => ({ id: L.uid('cat'), name, percent, target: target || 0, note: '', apr: 0, minPayment: 0 });
+  st.sections = [
+    { id: L.uid('sec'), name: 'Allowance', type: 'spend', percent: 35, color: '#7c9cff', categories: [c('Food & daily', 50), c('Transport', 20), c('Personal', 30)] },
+    { id: L.uid('sec'), name: 'Savings', type: 'save', percent: 20, color: '#5fd3a7', categories: [c('Wedding', 50), c('Car', 30), c('House & furniture', 20)] },
+    { id: L.uid('sec'), name: 'Emergency', type: 'save', percent: 10, color: '#f2b45b', categories: [c('6-month buffer', 100, 4500)] },
+    { id: L.uid('sec'), name: 'Debts', type: 'debt', percent: 15, color: '#f07a8a', categories: [c('Example debt (rename me)', 100, 1000)] },
+    { id: L.uid('sec'), name: 'Investments', type: 'invest', percent: 15, color: '#b48cf2', categories: [c('Long-term', 70), c('Short-term', 30)] },
+    { id: L.uid('sec'), name: 'Business', type: 'business', percent: 5, color: '#5cc6e8', categories: [c('Capital', 100)] }];
+  st.settings.wallets = [{ id: 'w_cash', name: 'Cash', opening: 0 }, { id: 'w_wish', name: 'Wish Money card', opening: 0 }];
+  return st;
+}
 
-let s = L.defaultState();
+let s = legacyState();
 assert.ok(L.validatePlan(s.sections).ok, 'default plan valid');
 
 // Split $1,700 and check it adds up to the cent
@@ -62,7 +76,7 @@ console.log('All logic tests passed.');
   assert.strictEqual(L.toUSD(895000, 'LBP', 89500), 10);
   assert.strictEqual(L.toUSD(12.345, 'USD'), 12.35);
 
-  const st = L.defaultState();
+  const st = legacyState();
   const w = st.settings.wallets;
   const sp = L.splitIncome(1000, st.sections);
   st.incomes.push({ id: 'i', date: L.localToday(), amount: 1000, walletId: w[0].id, allocations: sp.allocations });
@@ -106,7 +120,7 @@ console.log('All logic tests passed.');
 
 // ---------- sync merge ----------
 {
-  const base = L.defaultState(); base.settings.apiKey = 'local-key';
+  const base = legacyState(); base.settings.apiKey = 'local-key';
   const A = JSON.parse(JSON.stringify(base)), B = L.forUpload(JSON.parse(JSON.stringify(base)));
   A.transactions.push({ id: 'a1', createdAt: 1, date: '2026-11-01', amount: 5 });
   B.transactions.push({ id: 'b1', createdAt: 2, date: '2026-11-02', amount: 7 });

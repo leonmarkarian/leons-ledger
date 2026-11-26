@@ -30,6 +30,36 @@
     return Object.assign({ id: uid('cat'), name, percent, target: 0, note: '' }, extra || {});
   }
 
+  // Ready-made split plans offered on first launch (and as the default for new budgets)
+  const TEMPLATES = {
+    balanced: { name: 'Balanced', tag: '50 / 30 / 20', desc: 'Needs, wants and savings — the classic rule.', sections: [
+      ['Needs', 'spend', 50, [['Rent & bills', 45], ['Food & groceries', 35], ['Transport', 20]]],
+      ['Wants', 'spend', 30, [['Going out', 40], ['Shopping', 35], ['Subscriptions', 25]]],
+      ['Savings', 'save', 15, [['Emergency fund', 60, 3000], ['Goals', 40]]],
+      ['Debt', 'debt', 5, [['Debt payments', 100]]]] },
+    saver: { name: 'Saver', tag: 'Save 35%', desc: 'Grow savings and investments faster.', sections: [
+      ['Needs', 'spend', 50, [['Rent & bills', 45], ['Food & groceries', 35], ['Transport', 20]]],
+      ['Wants', 'spend', 15, [['Going out', 50], ['Shopping', 50]]],
+      ['Savings', 'save', 25, [['Emergency fund', 50, 5000], ['Goals', 50]]],
+      ['Investments', 'invest', 10, [['Long-term', 100]]]] },
+    debt: { name: 'Debt crusher', tag: '30% to debt', desc: 'Pay debts off as fast as possible.', sections: [
+      ['Needs', 'spend', 50, [['Rent & bills', 45], ['Food & groceries', 35], ['Transport', 20]]],
+      ['Wants', 'spend', 10, [['Fun money', 100]]],
+      ['Debt', 'debt', 30, [['Debt payments', 100]]],
+      ['Emergency', 'save', 10, [['Emergency fund', 100, 2000]]]] },
+    accounts: { name: 'Five accounts', tag: 'Allowance + 4', desc: 'Allowance, savings, emergency, debt & investing.', sections: [
+      ['Allowance', 'spend', 40, [['Daily spending', 60], ['Personal', 40]]],
+      ['Savings', 'save', 20, [['Big goals', 100]]],
+      ['Emergency', 'save', 10, [['6-month buffer', 100, 4500]]],
+      ['Debts', 'debt', 15, [['Debt payments', 100]]],
+      ['Investments', 'invest', 15, [['Long-term', 70], ['Short-term', 30]]]] }
+  };
+  function templateSections(key) {
+    const t = TEMPLATES[key] || TEMPLATES.balanced;
+    return t.sections.map(([name, type, percent, cats], i) => ({ id: uid('sec'), name, type, percent, color: PALETTE[i % PALETTE.length],
+      categories: cats.map(([n, pc, target]) => cat(n, pc, { target: target || 0 })) }));
+  }
+
   function defaultState() {
     return {
       schemaVersion: SCHEMA_VERSION,
@@ -41,26 +71,13 @@
         theme: 'black',
         pinHash: '',
         lbpRate: 89500,
-        wallets: [{ id: 'w_cash', name: 'Cash', opening: 0 }, { id: 'w_wish', name: 'Wish Money card', opening: 0 }],
+        wallets: [{ id: 'w_cash', name: 'Cash', opening: 0 }, { id: 'w_card', name: 'Bank card', opening: 0 }],
         aiEnabled: true,
         autoAdviceOnIncome: true,
         paymentMethods: ['Cash', 'Wish Money card'],
         aboutMe: ''
       },
-      sections: [
-        { id: uid('sec'), name: 'Allowance', type: 'spend', percent: 35, color: PALETTE[0], categories: [
-          cat('Food & daily', 50), cat('Transport', 20), cat('Personal', 30)] },
-        { id: uid('sec'), name: 'Savings', type: 'save', percent: 20, color: PALETTE[1], categories: [
-          cat('Wedding', 50, { target: 0 }), cat('Car', 30, { target: 0 }), cat('House & furniture', 20, { target: 0 })] },
-        { id: uid('sec'), name: 'Emergency', type: 'save', percent: 10, color: PALETTE[2], categories: [
-          cat('6-month buffer', 100, { target: 4500 })] },
-        { id: uid('sec'), name: 'Debts', type: 'debt', percent: 15, color: PALETTE[3], categories: [
-          cat('Example debt (rename me)', 100, { target: 1000 })] },
-        { id: uid('sec'), name: 'Investments', type: 'invest', percent: 15, color: PALETTE[4], categories: [
-          cat('Long-term', 70), cat('Short-term', 30)] },
-        { id: uid('sec'), name: 'Business', type: 'business', percent: 5, color: PALETTE[5], categories: [
-          cat('Capital', 100)] }
-      ],
+      sections: templateSections('balanced'),
       incomes: [],       // {id,date,amount,source,note,allocations:[{sectionId,categoryId,amount}],advice}
       transactions: [],  // {id,date,sectionId,categoryId,amount,method,note}
       transfers: [],     // {id,date,from:{sectionId,categoryId},to:{...},amount,note}
@@ -517,6 +534,7 @@
   }
 
   return {
+    TEMPLATES, templateSections,
     mdToHtml,
     mergeStates, forUpload, sameBudget, isEmptyBudget, DEVICE_KEYS,
     monthKey, localToday, addMonths, monthLabel, toUSD, walletBalances, monthlySeries, spendingByCategory, avgMonthlyIncome,

@@ -20,6 +20,17 @@ async function hashPassword(password, saltHex) {
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100000 }, key, 256);
   return Array.from(new Uint8Array(bits), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+function recoveryCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a = new Uint8Array(16); crypto.getRandomValues(a);
+  const s = Array.from(a, (x) => alphabet[x % alphabet.length]).join('');
+  return s.match(/.{4}/g).join('-');
+}
+const normCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+async function newRecovery(env, userId) {
+  const code = recoveryCode(), salt = rid(16), hash = await hashPassword(normCode(code), salt);
+  await env.DB.prepare('UPDATE users SET recovery_hash = ?, recovery_salt = ? WHERE id = ?').bind(hash, salt, userId).run();
+  return code;
+}
 function safeEqual(a, b) { if (a.length !== b.length) return false; let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
 
 async function readJSON(req, limit) {
@@ -66,7 +77,8 @@ async function handle(req, env) {
       env.DB.prepare('INSERT INTO users (id, username, pass_hash, salt, created) VALUES (?, ?, ?, ?, ?)').bind(id, u, hash, salt, now()),
       env.DB.prepare('INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)').bind(token, id, now())
     ]);
-    return json({ token, user: { id, username: u } });
+    const recovery = await newRecovery(env, id);
+    return json({ token, user: { id, username: u }, recoveryCode: recovery });
   }
   if (p === '/auth/login' && M === 'POST') {
     const { username, password } = await readJSON(req, 10000);
@@ -78,6 +90,23 @@ async function handle(req, env) {
     const token = rid(32);
     await env.DB.prepare('INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)').bind(token, row.id, now()).run();
     return json({ token, user: { id: row.id, username: row.username } });
+  }
+
+  if (p === '/auth/reset' && M === 'POST') {
+    const { username, recoveryCode: code, newPassword } = await readJSON(req, 10000);
+    const ip = req.headers.get('cf-connecting-ip') || 'x';
+    if (!(await bump(env, 'reset:' + ip, 20)).ok) return err(429, 'Too many attempts today. Try again tomorrow.');
+    if (String(newPassword || '').length < 8) return err(400, 'New password must be at least 8 characters.');
+    const row = await env.DB.prepare('SELECT id, username, recovery_hash, recovery_salt FROM users WHERE username = ?').bind(String(username || '').trim().toLowerCase()).first();
+    if (!row || !row.recovery_hash || !safeEqual(await hashPassword(normCode(code), row.recovery_salt), row.recovery_hash)) return err(401, 'That username and recovery code don’t match.');
+    const salt = rid(16), hash = await hashPassword(newPassword, salt), token = rid(32);
+    await env.DB.batch([
+      env.DB.prepare('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').bind(hash, salt, row.id),
+      env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.id),
+      env.DB.prepare('INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)').bind(token, row.id, now())
+    ]);
+    const fresh = await newRecovery(env, row.id);   // a used code is replaced
+    return json({ token, user: { id: row.id, username: row.username }, recoveryCode: fresh });
   }
 
   // ---------- AI proxy ----------
@@ -113,7 +142,45 @@ async function handle(req, env) {
     await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind((req.headers.get('authorization') || '').slice(7)).run();
     return json({ ok: true });
   }
+  async function checkPassword(pw) {
+    const row = await env.DB.prepare('SELECT pass_hash, salt FROM users WHERE id = ?').bind(user.id).first();
+    return row && safeEqual(await hashPassword(String(pw || ''), row.salt), row.pass_hash);
+  }
+  if (p === '/auth/recovery' && M === 'POST') {
+    const { password } = await readJSON(req, 10000);
+    if (!(await checkPassword(password))) return err(401, 'Wrong password.');
+    return json({ recoveryCode: await newRecovery(env, user.id) });
+  }
+  if (p === '/auth/password' && M === 'POST') {
+    const { oldPassword, newPassword } = await readJSON(req, 10000);
+    if (!(await checkPassword(oldPassword))) return err(401, 'Your current password is wrong.');
+    if (String(newPassword || '').length < 8) return err(400, 'New password must be at least 8 characters.');
+    const salt = rid(16), hash = await hashPassword(newPassword, salt);
+    const keep = (req.headers.get('authorization') || '').slice(7);
+    await env.DB.batch([
+      env.DB.prepare('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').bind(hash, salt, user.id),
+      env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').bind(user.id, keep)   // log out other devices
+    ]);
+    return json({ ok: true });
+  }
+  if (p === '/auth/delete' && M === 'POST') {
+    const { password } = await readJSON(req, 10000);
+    if (!(await checkPassword(password))) return err(401, 'Wrong password.');
+    const books = await env.DB.prepare('SELECT book_id FROM members WHERE user_id = ?').bind(user.id).all();
+    const stmts = [env.DB.prepare('DELETE FROM members WHERE user_id = ?').bind(user.id)];
+    for (const b of books.results) {
+      const others = await env.DB.prepare('SELECT COUNT(*) AS n FROM members WHERE book_id = ? AND user_id != ?').bind(b.book_id, user.id).first();
+      if (!others.n) stmts.push(env.DB.prepare('DELETE FROM books WHERE id = ?').bind(b.book_id), env.DB.prepare('DELETE FROM invites WHERE book_id = ?').bind(b.book_id));
+    }
+    stmts.push(env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
+      env.DB.prepare('DELETE FROM usage WHERE k = ?').bind('user:' + user.id),
+      env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id));
+    await env.DB.batch(stmts);
+    return json({ ok: true, deleted: true });
+  }
   if (p === '/me' && M === 'GET') {
+    const rec = await env.DB.prepare('SELECT recovery_hash FROM users WHERE id = ?').bind(user.id).first();
+    user.hasRecovery = !!(rec && rec.recovery_hash);
     const books = await env.DB.prepare('SELECT b.id, b.name, b.shared, b.rev, b.owner, m.role, (SELECT COUNT(*) FROM members x WHERE x.book_id = b.id) AS members FROM members m JOIN books b ON b.id = m.book_id WHERE m.user_id = ? ORDER BY b.shared, b.name').bind(user.id).all();
     return json({ user, books: books.results });
   }
