@@ -22,6 +22,8 @@
   let lastIncomeId = null;
   let aiBusy = false;
   let historyFilter = 'all';
+  let historyMonth = null;     // 'YYYY-MM' shown on the History page
+  let historySearch = '';
   let spendTab = 'spend';
   let manualUpdateCheck = false;
   let reportRange = 6;
@@ -481,10 +483,42 @@
     },
 
     history() {
-      const rows = activity().filter((r) => historyFilter === 'all' || r.kind === historyFilter);
-      return `<div class="row between"><div><h1>History</h1><p class="sub">Everything you've logged. Tap ✎ to edit or ✕ to delete.</p></div><button class="btn sm" data-go="reports">▦ Reports & export</button></div>
-        <div class="tabs">${[['all', 'All'], ['income', 'Income'], ['spend', 'Spending & payments'], ['transfer', 'Transfers']].map(([k, l]) => `<button data-filter="${k}" class="${historyFilter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
-        <div class="card">${rows.length ? activityList(rows, true) : '<div class="empty">Nothing here yet.</div>'}</div>`;
+      const all = activity();
+      const cur = today().slice(0, 7);
+      const months = [...new Set([cur, ...all.map((r) => monthKey(r.date))])].sort().reverse();
+      if (!historyMonth || !months.includes(historyMonth)) historyMonth = cur;
+      const kindOk = (r) => historyFilter === 'all' || r.kind === historyFilter;
+      const q = historySearch.trim().toLowerCase();
+      const head = `<div class="h-page"><div class="row between h-top"><h1>History</h1><button class="btn sm" data-go="reports">▦ Reports</button></div>
+        <div class="h-controls">
+          <div class="h-search"><span>⌕</span><input id="hSearch" placeholder="Search notes, categories, amounts…" value="${esc(historySearch)}" autocomplete="off">${q ? '<button class="icon-btn" id="hClear" title="Clear">✕</button>' : ''}</div>
+          <div class="seg">${[['all', 'All'], ['income', 'Money in'], ['spend', 'Money out'], ['transfer', 'Moves']].map(([k, l]) => `<button data-filter="${k}" class="${historyFilter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+        </div>`;
+      if (q) {
+        const hits = all.filter(kindOk).filter((r) => [r.title, r.what, r.sub, r.note, String(Math.abs(r.amount))].join(' ').toLowerCase().includes(q));
+        return head + `<p class="muted small">${hits.length} result${hits.length === 1 ? '' : 's'} for “${esc(historySearch)}” across all months</p>
+          ${hits.length ? historyDays(hits) : '<div class="card empty">Nothing matches that search.</div>'}</div>`;
+      }
+      const inMonth = all.filter((r) => monthKey(r.date) === historyMonth);
+      const rows = inMonth.filter(kindOk);
+      const tin = L.round2(L.sum(inMonth.filter((r) => r.kind === 'income'), (r) => r.amount));
+      const tout = L.round2(L.sum(inMonth.filter((r) => r.kind === 'spend'), (r) => -r.amount));
+      const i = months.indexOf(historyMonth);
+      return head + `
+        <div class="card h-month">
+          <div class="h-month-nav">
+            <button class="icon-btn" data-hm="${months[i + 1] || ''}" ${months[i + 1] ? '' : 'disabled'} title="Older">‹</button>
+            <select id="hMonth">${months.map((k) => `<option value="${k}" ${k === historyMonth ? 'selected' : ''}>${monthLabel(k)}</option>`).join('')}</select>
+            <button class="icon-btn" data-hm="${months[i - 1] || ''}" ${i > 0 ? '' : 'disabled'} title="Newer">›</button>
+          </div>
+          <div class="h-sum">
+            <div><span>Money in</span><b class="good">+${m(tin)}</b></div>
+            <div><span>Money out</span><b>−${m(tout)}</b></div>
+            <div><span>Difference</span><b class="${tin - tout < 0 ? 'bad' : ''}">${tin - tout < 0 ? '−' : '+'}${m(Math.abs(tin - tout))}</b></div>
+          </div>
+        </div>
+        ${rows.length ? historyDays(rows) : `<div class="card empty">${inMonth.length ? 'Nothing of this type this month.' : 'Nothing logged in ' + monthLabel(historyMonth) + ' yet.'}</div>`}
+        <p class="muted small h-hint">Tap an entry to edit or delete it.</p></div>`;
     },
 
     advisor() {
@@ -752,11 +786,46 @@
   function activity() {
     const name = (sid, cid) => { const { section, category } = L.findCategory(state, sid, cid); return section ? `${section.name} → ${category ? category.name : '?'}` : '(deleted category)'; };
     const rows = [];
+    const parts = (sid, cid) => { const { section, category } = L.findCategory(state, sid, cid); return section ? [category ? category.name : '?', section.name] : ['Deleted category', '']; };
     state.incomes.forEach((i) => rows.push({ kind: 'income', id: i.id, at: i.createdAt || 0, date: i.date, amount: i.amount, what: i.source || 'Income', note: i.note, detail: ['Into ' + walletName(i.walletId), i.original ? lbp(i.original.amount) : '', byTag(i)].filter(Boolean).join(' · ') }));
     state.transactions.forEach((t) => rows.push({ kind: 'spend', id: t.id, at: t.createdAt || 0, date: t.date, amount: -t.amount, what: name(t.sectionId, t.categoryId), note: t.note, detail: [walletName(t.walletId), t.original ? lbp(t.original.amount) : '', byTag(t)].filter(Boolean).join(' · ') }));
     state.walletTransfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${walletName(t.fromWalletId)}  ⇢  ${walletName(t.toWalletId)}`, note: t.note, detail: ['Wallet move', byTag(t)].filter(Boolean).join(' · '), wallet: true }));
     state.transfers.forEach((t) => rows.push({ kind: 'transfer', id: t.id, at: t.createdAt || 0, date: t.date, amount: t.amount, what: `${name(t.from.sectionId, t.from.categoryId)}  ⇢  ${name(t.to.sectionId, t.to.categoryId)}`, note: t.note, detail: byTag(t) }));
+    rows.forEach((r) => {
+      const src = r.kind === 'spend' ? state.transactions.find((t) => t.id === r.id) : null;
+      if (src) { const [c, sec] = parts(src.sectionId, src.categoryId); r.title = c; r.sub = [sec, walletName(src.walletId), byTag(src)].filter(Boolean).join(' · '); }
+      else if (r.kind === 'income') { r.title = r.what; r.sub = r.detail; }
+      else if (r.wallet) { r.title = r.what.replace(/\s+⇢\s+/, ' → '); r.sub = r.detail; }
+      else { const t = state.transfers.find((x) => x.id === r.id); const a = parts(t.from.sectionId, t.from.categoryId)[0], b = parts(t.to.sectionId, t.to.categoryId)[0]; r.title = `${a} → ${b}`; r.sub = ['Moved between buckets', byTag(t)].filter(Boolean).join(' · '); }
+    });
     return rows.sort((a, b) => b.date.localeCompare(a.date) || b.at - a.at);
+  }
+  const monthKey = (d) => String(d).slice(0, 7);
+  const monthLabel = (k) => new Date(k + '-15T12:00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  function dayLabel(d) {
+    const k = String(d).slice(0, 10); const t = today();
+    const y = new Date(Date.now() - 86400000); const yk = new Date(y.getTime() - y.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    if (k === t) return 'Today'; if (k === yk) return 'Yesterday';
+    const o = { weekday: 'long', day: 'numeric', month: 'short' }; if (k.slice(0, 4) !== t.slice(0, 4)) o.year = 'numeric';
+    return new Date(k + 'T12:00:00').toLocaleDateString('en-GB', o);
+  }
+  function historyRow(r) {
+    const ico = { income: ['in', '＋'], spend: ['out', '−'], transfer: ['tr', '⇄'] };
+    const sub = [r.sub, r.note].filter(Boolean).join(' · ');
+    return `<div class="h-row" tabindex="0">
+      <span class="act-ico ${ico[r.kind][0]}">${ico[r.kind][1]}</span>
+      <div class="h-main"><div class="h-title">${esc(r.title || r.what)}</div>${sub ? `<div class="h-sub">${esc(sub)}</div>` : ''}</div>
+      <div class="h-amt ${r.kind === 'income' ? 'good' : ''}">${r.kind === 'income' ? '+' : r.kind === 'spend' ? '−' : ''}${m(Math.abs(r.amount))}</div>
+      <div class="h-tools">${r.wallet ? '' : `<button class="btn sm ghost" data-edit="${r.kind}|${r.id}">✎ Edit</button>`}<button class="btn sm ghost danger" data-del="${r.wallet ? 'wtransfer' : r.kind}|${r.id}">✕ Delete</button></div>
+    </div>`;
+  }
+  function historyDays(rows) {
+    const days = []; rows.forEach((r) => { const k = String(r.date).slice(0, 10); const d = days[days.length - 1]; if (d && d.k === k) d.rows.push(r); else days.push({ k, rows: [r] }); });
+    return days.map((d) => {
+      const out = L.round2(L.sum(d.rows.filter((r) => r.kind === 'spend'), (r) => -r.amount));
+      return `<div class="h-day"><div class="h-day-head"><span>${dayLabel(d.k)}</span>${out ? `<span class="muted">−${m(out)}</span>` : ''}</div>
+        <div class="card h-card">${d.rows.map(historyRow).join('')}</div></div>`;
+    }).join('');
   }
 
   function activityList(rows, editable) {
@@ -1151,6 +1220,12 @@
 
   function bindHistory() {
     $$('[data-filter]').forEach((b) => (b.onclick = () => { historyFilter = b.dataset.filter; render(); }));
+    $$('[data-hm]').forEach((b) => (b.onclick = () => { if (b.dataset.hm) { historyMonth = b.dataset.hm; render(); } }));
+    if ($('#hMonth')) $('#hMonth').onchange = (e) => { historyMonth = e.target.value; render(); };
+    if ($('#hClear')) $('#hClear').onclick = () => { historySearch = ''; render(); };
+    const hs = $('#hSearch'); let hsT;
+    if (hs) hs.oninput = () => { clearTimeout(hsT); hsT = setTimeout(() => { historySearch = hs.value; const pos = hs.selectionStart; render(); const n = $('#hSearch'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+    $$('.h-row').forEach((row) => (row.onclick = (e) => { if (e.target.closest('button')) return; const was = row.classList.contains('open'); $$('.h-row.open').forEach((x) => x.classList.remove('open')); if (!was) row.classList.add('open'); }));
     const listOf = { income: 'incomes', spend: 'transactions', transfer: 'transfers', wtransfer: 'walletTransfers' };
     $$('[data-del]').forEach((b) => (b.onclick = async () => {
       const [kind, id] = b.dataset.del.split('|');
@@ -1583,10 +1658,64 @@
     return true;
   }
 
+  // ---- Intro slides shown before setup ----
+  const INTRO = [
+    { t: 'Money in, money out', s: 'All in one place', art: () => `
+      <div class="ia ia-flow">
+        <div class="ia-chip in" style="--d:.15s"><span>＋</span><b>Salary</b><em>+$1,700</em></div>
+        <div class="ia-chip out" style="--d:.45s"><span>−</span><b>Groceries</b><em>−$64</em></div>
+        <div class="ia-chip out" style="--d:.75s"><span>−</span><b>Rent</b><em>−$520</em></div>
+        <div class="ia-total" style="--d:1.15s"><small>Left to spend</small><b>$1,116</b></div>
+      </div>` },
+    { t: 'Plan it once', s: 'Divides automatically', art: () => `
+      <div class="ia ia-split">
+        <div class="ia-pay"><small>Paycheck</small><b>$1,000</b></div>
+        <div class="ia-arrow">↓</div>
+        ${[['Needs', 50, 0], ['Wants', 20, 1], ['Savings', 20, 2], ['Debt', 10, 3]].map(([n, p, i]) => `
+          <div class="ia-row" style="--d:${0.5 + i * 0.18}s"><span>${n}</span><i style="--w:${p * 2}%;background:${L.PALETTE[i]}"></i><b>$${p * 10}</b></div>`).join('')}
+      </div>` },
+    { t: 'Meet your goals on time', s: '', art: () => `
+      <div class="ia ia-goal">
+        <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" class="trk"/><circle cx="60" cy="60" r="50" class="prg"/></svg>
+        <div class="ia-goal-in"><b>100%</b><small>Japan trip</small></div>
+        <div class="ia-check">✓ On time</div>
+      </div>` },
+    { t: 'Ask for advice about your finances', s: '', art: () => `
+      <div class="ia ia-chat">
+        <div class="ia-msg me" style="--d:.2s">Can I afford a trip in June?</div>
+        <div class="ia-msg ai typing" style="--d:.8s"><i></i><i></i><i></i></div>
+        <div class="ia-msg ai" style="--d:1.7s">Yes. Put <b>$250</b> a month into Travel and you'll have it by May.</div>
+      </div>` },
+    { t: 'Share your budget', s: 'Same account, different people', art: () => `
+      <div class="ia ia-share">
+        <div class="ia-av a" style="--d:.15s">L</div>
+        <div class="ia-av b" style="--d:.35s">M</div>
+        <svg class="ia-lines" viewBox="0 0 240 120"><path d="M40 30 C 90 30, 100 60, 120 60" /><path d="M200 30 C 150 30, 140 60, 120 60" /></svg>
+        <div class="ia-book" style="--d:.8s"><small>Our home</small><b>$2,430</b><span>✓ Synced</span></div>
+      </div>` }
+  ];
+  function introHtml(i) {
+    const last = i === INTRO.length - 1;
+    return `<div class="intro">
+      <div class="intro-top"><div class="intro-logo">${$('.brand .logo').innerHTML}</div>${last ? '<span></span>' : '<button class="link intro-skip" data-iskip>Skip</button>'}</div>
+      <div class="intro-track" style="--i:${i}">${INTRO.map((sl, k) => `
+        <section class="intro-slide ${k === i ? 'on' : ''}" aria-hidden="${k !== i}">
+          <div class="intro-art">${k === i ? sl.art() : ''}</div>
+          <h1>${sl.t}</h1>${sl.s ? `<p>${sl.s}</p>` : ''}
+        </section>`).join('')}</div>
+      <div class="intro-bottom">
+        <div class="intro-dots">${INTRO.map((_, k) => `<i class="${k === i ? 'on' : ''}" data-igo="${k}"></i>`).join('')}</div>
+        ${last ? `<button class="btn primary ob-main" data-next>Get started</button>
+          <button class="btn ghost ob-main" data-login>I already have an account</button>
+          <p class="muted small ob-legal">By continuing you agree to the <a href="${TERMS_URL}" target="_blank" rel="noopener">Terms</a> and <a href="${PRIVACY_URL}" target="_blank" rel="noopener">Privacy Policy</a>.</p>`
+        : `<button class="btn primary ob-main" data-inext>Next</button>`}
+      </div></div>`;
+  }
+
   function onboarding() {
     return new Promise((resolve) => {
       const host = $('#onboardRoot');
-      const ob = { step: 0, name: '', cur: 'USD', lira: false, rate: 89500, wallets: ['Cash', 'Bank card'], tpl: 'balanced', mode: 'new' };
+      const ob = { slide: 0, step: 0, name: '', cur: 'USD', lira: false, rate: 89500, wallets: ['Cash', 'Bank card'], tpl: 'balanced', mode: 'new' };
       const finish = async (opts) => {
         if (!(opts && opts.keepBook)) {
           const st = L.defaultState();
@@ -1608,6 +1737,7 @@
       const STEPS = ['welcome', 'you', 'wallets', 'plan', 'account', 'done'];
       const draw = () => {
         const key = ob.mode === 'login' ? 'login' : STEPS[ob.step];
+        if (key === 'welcome') { drawIntro(); return; }
         const dots = ob.mode === 'login' ? '' : `<div class="ob-dots">${STEPS.slice(1, 5).map((_, i) => `<i class="${i + 1 <= ob.step ? 'on' : ''}"></i>`).join('')}</div>`;
         const logoHtml = $('.brand .logo').innerHTML;
         const body = {
@@ -1655,6 +1785,35 @@
         const nav = ['you', 'wallets', 'plan'].includes(key) ? `<div class="row between ob-nav"><button class="btn ghost" data-back>Back</button><button class="btn primary" data-next>Continue</button></div>` : '';
         host.innerHTML = `<div class="ob-screen"><div class="ob-card" data-step="${key}">${dots}${body}${nav}</div></div>`;
         bind(key);
+      };
+      const drawIntro = (dir) => {
+        const old = $('.intro', host);
+        if (old && dir) {
+          // slide the track, then swap in the new art so its animation plays
+          $('.intro-track', old).style.setProperty('--i', ob.slide);
+          $$('.intro-slide', old).forEach((x, k) => { x.classList.toggle('on', k === ob.slide); x.querySelector('.intro-art').innerHTML = k === ob.slide ? INTRO[k].art() : ''; });
+          $$('.intro-dots i', old).forEach((x, k) => x.classList.toggle('on', k === ob.slide));
+          const last = ob.slide === INTRO.length - 1;
+          const wasLast = !!$('[data-login]', old);
+          if (last !== wasLast) { const tmp = document.createElement('div'); tmp.innerHTML = introHtml(ob.slide); $('.intro-bottom', old).replaceWith($('.intro-bottom', tmp)); $('.intro-top', old).replaceWith($('.intro-top', tmp)); }
+        } else {
+          host.innerHTML = `<div class="ob-screen intro-screen">${introHtml(ob.slide)}</div>`;
+          const tr = $('.intro', host); let x0 = null, y0 = null;
+          tr.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+          tr.addEventListener('touchend', (e) => {
+            if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+            if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) go2(ob.slide + (dx < 0 ? 1 : -1));
+          });
+          if (!drawIntro.keys) { drawIntro.keys = true; document.addEventListener('keydown', (e) => { if (!$('.intro', host)) return; if (e.key === 'ArrowRight') go2(ob.slide + 1); if (e.key === 'ArrowLeft') go2(ob.slide - 1); }); }
+        }
+        bindIntro();
+      };
+      const go2 = (k) => { k = Math.max(0, Math.min(INTRO.length - 1, k)); if (k === ob.slide) return; ob.slide = k; drawIntro(true); };
+      const bindIntro = () => {
+        $$('[data-inext]', host).forEach((b) => (b.onclick = () => go2(ob.slide + 1)));
+        $$('[data-iskip]', host).forEach((b) => (b.onclick = () => go2(INTRO.length - 1)));
+        $$('[data-igo]', host).forEach((b) => (b.onclick = () => go2(+b.dataset.igo)));
+        bind('welcome');
       };
       const save = () => {
         if ($('#obName')) ob.name = $('#obName').value;
