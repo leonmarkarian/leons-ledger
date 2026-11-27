@@ -598,25 +598,24 @@
     return out.length ? `<div class="chips">${out.map((x) => `<span class="chip">${x}</span>`).join('')}</div>` : '';
   }
   function planOverviewHtml() {
-    const secs = state.sections, ex = planExample;
-    return `<div class="row between plan-top"><div><h1>Split plan</h1><p class="sub">How every paycheck is divided between your buckets.</p></div>
-        <button class="btn primary" id="planEdit">✎ Edit plan</button></div>
+    const secs = state.sections;
+    return `<div class="plan-top"><h1>Split plan</h1><p class="sub">How every paycheck is divided between your buckets.</p></div>
       <div class="card plan-ov">
-        <div class="ex-row"><span>If you get paid</span><div class="money-input ex-input" data-sym="${sym()}"><input id="planEx" type="text" inputmode="decimal" autocomplete="off" value="${ex}"></div><span class="muted">it's split like this:</span></div>
         ${planBar(secs)}
         <div class="ov-list">${secs.map((sec, si) => `
           <div class="ov-sec" style="--c:${sec.color}">
             <div class="ov-head"><span class="dot"></span>
               <div class="ov-name"><b>${esc(sec.name)}</b><span class="muted small">${L.SECTION_TYPES[sec.type].label} · ${PURPOSE[sec.type] || ''}</span></div>
-              <div class="ov-amt"><b data-exs="${si}">${m(ex * sec.percent / 100)}</b><span class="muted small">${pctTxt(sec.percent)} of paycheck</span></div></div>
+              <div class="ov-amt"><b>${pctTxt(sec.percent)}</b><span class="muted small">of paycheck</span></div></div>
             <div class="ov-cats">${sec.categories.map((c, ci) => `
               <div class="ov-cat">
-                <div class="ov-cat-name"><span>${esc(c.name)}</span><span class="muted small">${pctTxt(sec.percent * c.percent / 100)} of paycheck${sec.categories.length > 1 ? ` · ${pctTxt(c.percent)} of ${esc(sec.name)}` : ''}</span>${catChips(sec, c)}</div>
-                <b data-exc="${si}|${ci}">${m(ex * sec.percent / 100 * c.percent / 100)}</b>
+                <div class="ov-cat-name"><span>${esc(c.name)}</span>${sec.categories.length > 1 ? `<span class="muted small">${pctTxt(c.percent)} of ${esc(sec.name)}</span>` : ''}${catChips(sec, c)}</div>
+                <b>${pctTxt(sec.percent * c.percent / 100)}</b>
                 <div class="mini-bar"><i style="width:${Number(c.percent) || 0}%"></i></div>
               </div>`).join('')}</div>
           </div>`).join('')}</div>
       </div>
+      <button class="btn primary plan-edit-btn" id="planEdit">✎ Edit plan</button>
       <p class="muted small">Changing the plan only affects future paychecks. Past ones keep the split they were saved with, so your history stays accurate.</p>`;
   }
   function assignStatus(total, ofWhat) {
@@ -1069,13 +1068,6 @@
     const rerender = () => { const y = $('#main').scrollTop; render(); $('#main').scrollTop = y; };
     if (!planEditing) {
       $('#planEdit').onclick = () => { planEditing = true; draftPlan = null; render(); $('#main').scrollTop = 0; };
-      $('#planEx').oninput = (e) => {
-        planExample = Math.max(0, num(e.target.value));
-        state.sections.forEach((sec, si) => {
-          const el = $(`[data-exs="${si}"]`); if (el) el.textContent = m(planExample * sec.percent / 100);
-          sec.categories.forEach((c, ci) => { const x = $(`[data-exc="${si}|${ci}"]`); if (x) x.textContent = m(planExample * sec.percent / 100 * c.percent / 100); });
-        });
-      };
       return;
     }
     $$('[data-k]').forEach((el) => {

@@ -687,3 +687,4 @@ details.bk > summary { display: grid !important; grid-template-columns: 12px min
 details.bk > summary::before, details.more > summary::before { content: none; }
 details.more > summary::before { content: '＋ '; } details.more[open] > summary::before { content: '− '; }
 .bk-name { text-align: left; } .bk-amt { text-align: right; }
+.plan-edit-btn { width: 100%; margin: 14px 0 10px; padding: 15px; font-size: 16px; font-weight: 700; border-radius: 16px; justify-content: center; }
