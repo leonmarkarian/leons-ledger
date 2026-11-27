@@ -191,7 +191,9 @@
   const lbp = (n) => 'LBP ' + Math.round(n).toLocaleString('en-US');
 
   function applyTheme() {
-    const t = state.settings.theme || 'black';
+    // v1.6: white & beige is the new default; switch anyone who never picked a theme themselves
+    if (!state.settings.themePicked && (!state.settings.theme || state.settings.theme === 'black')) state.settings.theme = 'cream';
+    const t = state.settings.theme || 'cream';
     document.documentElement.dataset.theme = t;
     const meta = document.querySelector('meta[name=theme-color]');
     if (meta) meta.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#000');
@@ -548,7 +550,7 @@
             <p class="small muted" style="margin-bottom:0">AI settings are saved with <b>Save settings</b>.</p>
           </div>
             <div class="card"><h2>Theme</h2>
-              <div class="themes">${[['black', 'Black'], ['navy', 'Navy'], ['pink', 'Pink'], ['light', 'Light']].map(([k, l]) => `<button class="theme-swatch ${s.theme === k ? 'active' : ''}" data-theme-pick="${k}"><span class="sw sw-${k}"></span>${l}</button>`).join('')}</div>
+              <div class="themes">${[['cream', 'Cream'], ['light', 'White'], ['black', 'Black'], ['navy', 'Navy'], ['pink', 'Pink']].map(([k, l]) => `<button class="theme-swatch ${s.theme === k ? 'active' : ''}" data-theme-pick="${k}"><span class="sw sw-${k}"></span>${l}</button>`).join('')}</div>
             </div>
             <div class="card"><h2>Wallets</h2>
               <p class="muted small" style="margin-top:0">Where your money physically is — cash, cards, bank. Starting balance = what was in it before you started using the app.</p>
@@ -609,7 +611,7 @@
               <div class="ov-amt"><b>${pctTxt(sec.percent)}</b><span class="muted small">of paycheck</span></div></div>
             <div class="ov-cats">${sec.categories.map((c, ci) => `
               <div class="ov-cat">
-                <div class="ov-cat-name"><span>${esc(c.name)}</span>${sec.categories.length > 1 ? `<span class="muted small">${pctTxt(c.percent)} of ${esc(sec.name)}</span>` : ''}${catChips(sec, c)}</div>
+                <div class="ov-cat-name"><span>${esc(c.name)}</span>${catChips(sec, c)}</div>
                 <b>${pctTxt(sec.percent * c.percent / 100)}</b>
                 <div class="mini-bar"><i style="width:${Number(c.percent) || 0}%"></i></div>
               </div>`).join('')}</div>
@@ -627,35 +629,53 @@
     if (sec.type === 'debt') return c.target ? `Owes ${m(c.target)}` : 'Debt details';
     return c.target ? `Goal ${m(c.target)}` : (c.note ? 'Note' : 'Goal / note');
   }
+  // The editor works in "% of paycheck" for every category; bucket shares are just the sum of their categories.
+  function draftFromPlan(sections) {
+    const d = JSON.parse(JSON.stringify(sections));
+    d.forEach((sec) => sec.categories.forEach((c) => (c.pp = L.round2((Number(sec.percent) || 0) * (Number(c.percent) || 0) / 100))));
+    return d;
+  }
+  const secPP = (sec) => L.round2(L.sum(sec.categories, (c) => Number(c.pp) || 0));
+  const draftTotal = () => L.round2(L.sum(draftPlan, secPP));
+  function planFromDraft(d) {
+    return d.map((sec) => {
+      const t = secPP(sec); const out = Object.assign({}, sec, { percent: t });
+      out.categories = sec.categories.map((c) => { const o = Object.assign({}, c); delete o.pp; return o; });
+      if (t > 0) out.categories.forEach((c, i) => (c.percent = (Number(sec.categories[i].pp) || 0) / t * 100));
+      else { const parts = L.distribute(100, out.categories.map(() => 1)); out.categories.forEach((c, i) => (c.percent = parts[i])); }
+      return out;
+    });
+  }
+  function draftCheck() {
+    const total = draftTotal(); const errors = [];
+    draftPlan.forEach((sec) => { if (!sec.categories.length) errors.push(`"${sec.name}" has no categories.`); });
+    return { ok: Math.abs(total - 100) < 0.001 && !errors.length, errors, total };
+  }
   function planEditorHtml() {
-    if (!draftPlan) draftPlan = JSON.parse(JSON.stringify(state.sections));
-    const v = L.validatePlan(draftPlan); const st = assignStatus(v.total, 'your paycheck');
+    if (!draftPlan) draftPlan = draftFromPlan(state.sections);
+    const v = draftCheck(); const st = assignStatus(v.total, 'your paycheck');
     const types = Object.entries(L.SECTION_TYPES); const ex = planExample;
     return `<div class="sticky-bar plan-edit-bar"><div class="row between"><div><h1>Edit split plan</h1>
           <div class="assign ${st.cls}" id="planStatus">${st.text}</div></div>
         <div class="row"><button class="btn ghost" id="planCancel">Cancel</button><button class="btn primary" id="planSave" ${v.ok ? '' : 'disabled'}>Save plan</button></div></div>
-        <div class="errors" id="planErrors">${v.errors.filter((e) => !/^Buckets add up/.test(e)).map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div>
-      <p class="muted small">Amounts are shown for a ${m(ex)} paycheck and update as you type.</p>
+        <div class="errors" id="planErrors">${v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('')}</div></div>
+      <div class="card plan-how"><b>How it works</b><span class="muted">Give each category a share of your <b>whole paycheck</b>. Everything together must add up to 100%. The bucket totals add themselves up.</span></div>
       ${draftPlan.map((sec, si) => {
-        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0)); const cs = assignStatus(ct, esc(sec.name || 'this bucket'));
         return `<div class="plan-sec" style="--c:${sec.color}">
           <div class="ps-head">
             <input type="color" value="${sec.color}" data-s="${si}" data-k="color" title="Bucket colour">
             <label class="f ps-name">Bucket name<input value="${esc(sec.name)}" data-s="${si}" data-k="name" placeholder="e.g. Needs"></label>
             <label class="f ps-type">Used for<select data-s="${si}" data-k="type">${types.map(([k, t]) => `<option value="${k}" ${sec.type === k ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>
-            <label class="f ps-pct">Share of paycheck<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${sec.percent}" data-s="${si}" data-k="percent"></div></label>
+            <div class="ps-pct ps-total"><span class="muted small">Bucket total</span><b data-sectot="${si}">${pctTxt(secPP(sec))}</b></div>
             <button class="icon-btn ps-del" data-delsec="${si}" title="Delete bucket">✕</button>
           </div>
-          <div class="ps-help muted small" data-sechelp="${si}">= <b>${m(ex * (Number(sec.percent) || 0) / 100)}</b> of every ${m(ex)} paycheck</div>
           <div class="ps-cats">
-            <div class="ps-cats-head"><span class="small"><b>Categories in ${esc(sec.name || 'this bucket')}</b></span>
-              <span class="assign small ${cs.cls}" data-catstatus="${si}">${cs.text}</span>
-              <button class="btn sm ghost ${Math.abs(ct - 100) > 0.001 ? '' : 'hidden'}" data-even="${si}">Split evenly</button></div>
+            <div class="ps-cats-head"><span class="small"><b>Categories in ${esc(sec.name || 'this bucket')}</b></span></div>
             ${sec.categories.map((c, ci) => { const key = si + '|' + ci; const open = planOpen.has(sec.id + '|' + c.id);
               return `<div class="pc-row ${open ? 'open' : ''}">
                 <label class="f pc-name">Category<input value="${esc(c.name)}" data-s="${si}" data-c="${ci}" data-k="name" placeholder="e.g. Groceries"></label>
-                <label class="f pc-pct">% of ${esc(sec.name || 'bucket')}<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${c.percent}" data-s="${si}" data-c="${ci}" data-k="percent"></div></label>
-                <div class="pc-amt" data-cathelp="${key}"><b>${m(ex * (Number(sec.percent) || 0) / 100 * (Number(c.percent) || 0) / 100)}</b><span class="muted small">${pctTxt((Number(sec.percent) || 0) * (Number(c.percent) || 0) / 100)} of paycheck</span></div>
+                <label class="f pc-pct">% of paycheck<div class="pct-input"><input type="text" inputmode="decimal" autocomplete="off" value="${c.pp}" data-s="${si}" data-c="${ci}" data-k="pp"></div></label>
+                <div class="pc-amt" data-cathelp="${key}"><span class="muted small">e.g. of ${m(ex)}</span><b>${m(ex * (Number(c.pp) || 0) / 100)}</b></div>
                 <button class="btn sm ghost pc-more" data-details="${sec.id}|${c.id}">${detailsLabel(sec, c)} <span class="chev">▾</span></button>
                 <button class="icon-btn pc-del" data-delcat="${key}" title="Delete category">✕</button>
                 <div class="pc-details">
@@ -1075,26 +1095,22 @@
       el.addEventListener(evt, () => {
         const sec = draftPlan[+el.dataset.s]; const k = el.dataset.k;
         const target = el.dataset.c != null ? sec.categories[+el.dataset.c] : sec;
-        target[k] = ['percent', 'target', 'apr', 'minPayment'].includes(k) ? num(el.value) : el.value;
+        target[k] = ['percent', 'pp', 'target', 'apr', 'minPayment'].includes(k) ? num(el.value) : el.value;
         if (k === 'color' || k === 'type') rerender();       // a picker changed: safe to redraw
         else updateLive();                                   // typing: update numbers in place (no jumping cursor)
       });
     });
     function updateLive() {
       const ex = planExample;
-      const v = L.validatePlan(draftPlan); const st = assignStatus(v.total, 'your paycheck');
+      const v = draftCheck(); const st = assignStatus(v.total, 'your paycheck');
       const ps = $('#planStatus'); ps.textContent = st.text; ps.className = 'assign ' + st.cls;
-      $('#planErrors').innerHTML = v.errors.filter((e) => !/^Buckets add up/.test(e)).map((e) => `<div>• ${esc(e)}</div>`).join('');
+      $('#planErrors').innerHTML = v.errors.map((e) => `<div>• ${esc(e)}</div>`).join('');
       $('#planSave').disabled = !v.ok;
       draftPlan.forEach((sec, si) => {
-        const sp = Number(sec.percent) || 0;
-        const h = $(`[data-sechelp="${si}"]`); if (h) h.innerHTML = `= <b>${m(ex * sp / 100)}</b> of every ${m(ex)} paycheck`;
-        const ct = L.round2(L.sum(sec.categories, (c) => Number(c.percent) || 0)); const cs = assignStatus(ct, esc(sec.name || 'this bucket'));
-        const el = $(`[data-catstatus="${si}"]`); if (el) { el.textContent = cs.text; el.className = 'assign small ' + cs.cls; }
-        const ev = $(`[data-even="${si}"]`); if (ev) ev.classList.toggle('hidden', Math.abs(ct - 100) < 0.001);
+        const t = $(`[data-sectot="${si}"]`); if (t) t.textContent = pctTxt(secPP(sec));
         sec.categories.forEach((c, ci) => {
-          const x = $(`[data-cathelp="${si}|${ci}"]`); const cp = Number(c.percent) || 0;
-          if (x) x.innerHTML = `<b>${m(ex * sp / 100 * cp / 100)}</b><span class="muted small">${pctTxt(sp * cp / 100)} of paycheck</span>`;
+          const x = $(`[data-cathelp="${si}|${ci}"]`);
+          if (x) x.innerHTML = `<span class="muted small">e.g. of ${m(ex)}</span><b>${m(ex * (Number(c.pp) || 0) / 100)}</b>`;
         });
       });
     }
@@ -1104,12 +1120,8 @@
       row.classList.toggle('open', planOpen.has(k));
       if (planOpen.has(k)) { const f = $('.pc-details input', row); if (f) setTimeout(() => f.focus(), 50); }
     }));
-    $('#planAddSec').onclick = () => { draftPlan.push({ id: L.uid('sec'), name: 'New bucket', type: 'other', percent: 0, color: L.PALETTE[draftPlan.length % L.PALETTE.length], categories: [{ id: L.uid('cat'), name: 'General', percent: 100, target: 0, note: '' }] }); rerender(); };
-    $$('[data-addcat]').forEach((b) => (b.onclick = () => { draftPlan[+b.dataset.addcat].categories.push({ id: L.uid('cat'), name: 'New category', percent: 0, target: 0, note: '' }); rerender(); }));
-    $$('[data-even]').forEach((b) => (b.onclick = () => {
-      const cats = draftPlan[+b.dataset.even].categories; const parts = L.distribute(100, cats.map(() => 1));
-      cats.forEach((c, i) => (c.percent = parts[i])); rerender();
-    }));
+    $('#planAddSec').onclick = () => { draftPlan.push({ id: L.uid('sec'), name: 'New bucket', type: 'other', percent: 0, color: L.PALETTE[draftPlan.length % L.PALETTE.length], categories: [{ id: L.uid('cat'), name: 'General', percent: 100, pp: 0, target: 0, note: '' }] }); rerender(); };
+    $$('[data-addcat]').forEach((b) => (b.onclick = () => { draftPlan[+b.dataset.addcat].categories.push({ id: L.uid('cat'), name: 'New category', percent: 0, pp: 0, target: 0, note: '' }); rerender(); }));
     $$('[data-delcat]').forEach((b) => (b.onclick = async () => {
       const [si, ci] = b.dataset.delcat.split('|').map(Number); const sec = draftPlan[si];
       if (sec.categories.length === 1) return toast('A bucket needs at least one category — delete the bucket instead.', true);
@@ -1124,7 +1136,9 @@
     $('#planCancel').onclick = () => { draftPlan = null; planEditing = false; render(); $('#main').scrollTop = 0; };
     $('#planSave').onclick = async () => {
       draftPlan.forEach((x) => { x.name = x.name.trim() || 'Untitled'; x.categories.forEach((c) => (c.name = c.name.trim() || 'Untitled')); });
-      state.sections = JSON.parse(JSON.stringify(draftPlan));
+      const plan = planFromDraft(draftPlan); const chk = L.validatePlan(plan);
+      if (!chk.ok) return toast(chk.errors[0], true);
+      state.sections = plan;
       state.planUpdatedAt = Date.now();
       await persist(); toast('Plan saved. Your next paycheck will use it.'); draftPlan = null; planEditing = false; render(); $('#main').scrollTop = 0;
     };
@@ -1234,7 +1248,7 @@
     };
     $('#uCheck').onclick = () => { manualUpdateCheck = true; api.checkUpdates(); };
     bindAccount();
-    $$('[data-theme-pick]').forEach((b) => (b.onclick = async () => { state.settings.theme = b.dataset.themePick; applyTheme(); await persist(); render(); }));
+    $$('[data-theme-pick]').forEach((b) => (b.onclick = async () => { state.settings.theme = b.dataset.themePick; state.settings.themePicked = true; applyTheme(); await persist(); render(); }));
     const readWallets = () => state.settings.wallets.map((w, i) => Object.assign({}, w, { name: ($(`[data-wname="${i}"]`).value || '').trim() || w.name, opening: num($(`[data-wopen="${i}"]`).value) }));
     $('#wAdd').onclick = () => { state.settings.wallets = readWallets(); state.settings.wallets.push({ id: L.uid('w'), name: 'New wallet', opening: 0 }); render(); };
     $('#wSave').onclick = async () => { state.settings.wallets = readWallets(); state.settingsUpdatedAt = Date.now(); await persist(); toast('Wallets saved.'); render(); };

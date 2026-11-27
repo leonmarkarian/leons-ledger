@@ -41,8 +41,8 @@ fs.writeFileSync(path.join(out, 'manifest.webmanifest'), JSON.stringify({
   scope: './',
   display: 'standalone',
   orientation: 'portrait',
-  background_color: '#000000',
-  theme_color: '#000000',
+  background_color: '#faf6ef',
+  theme_color: '#faf6ef',
   icons: [
     { src: `icons/icon-192.png?v=${version}`, sizes: '192x192', type: 'image/png' },
     { src: `icons/icon-512.png?v=${version}`, sizes: '512x512', type: 'image/png' },

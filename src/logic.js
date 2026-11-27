@@ -68,7 +68,7 @@
         currencySymbol: '$',
         apiKey: '',
         model: 'claude-haiku-5-5',
-        theme: 'black',
+        theme: 'cream',
         pinHash: '',
         lbpRate: 89500,
         wallets: [{ id: 'w_cash', name: 'Cash', opening: 0 }, { id: 'w_card', name: 'Bank card', opening: 0 }],
@@ -456,7 +456,7 @@
 
 
   // ---------- Sync helpers ----------
-  const DEVICE_KEYS = ['apiKey', 'pinHash', 'theme'];
+  const DEVICE_KEYS = ['apiKey', 'pinHash', 'theme', 'themePicked'];
   const LIST_KEYS = ['incomes', 'transactions', 'transfers', 'walletTransfers', 'recurring'];
   const stamp = (x) => x.updatedAt || x.createdAt || 0;
 
